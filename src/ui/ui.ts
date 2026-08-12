@@ -1,0 +1,675 @@
+/**
+ * The HUD. Everything here is DOM layered over the canvas — bars, panels and
+ * the joystick — while the world itself stays entirely canvas-rendered.
+ *
+ * Cheap widgets (bars, cooldowns, minimap) refresh every frame; the heavy
+ * panels only rebuild when the game marks itself dirty or a panel is opened.
+ */
+import { clamp } from '../core/math'
+import { MILESTONES, QUESTS, RARITY_COLORS } from '../game/content'
+import { itemScore, rarityName, statLines } from '../game/loot'
+import type { Game } from '../game/state'
+import { SLOTS, SLOT_LABEL, type Item } from '../game/types'
+import type { QuestObjective } from '../game/content'
+import { CAMPS, MAP_TILES, WORLD_SIZE } from '../game/world'
+import type { Renderer } from '../render/renderer'
+import { abilityIcon, itemIcon } from '../render/sprites'
+
+type Tab = 'bag' | 'quests' | 'rewards'
+
+function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  className?: string,
+  html?: string,
+): HTMLElementTagNameMap[K] {
+  const n = document.createElement(tag)
+  if (className) n.className = className
+  if (html !== undefined) n.innerHTML = html
+  return n
+}
+
+export class UI {
+  readonly stickZone: HTMLElement
+  readonly stick: HTMLElement
+
+  private root: HTMLElement
+  private hpFill!: HTMLElement
+  private hpLabel!: HTMLElement
+  private xpFill!: HTMLElement
+  private xpLabel!: HTMLElement
+  private lvlLabel!: HTMLElement
+  private statLine!: HTMLElement
+  private goldLabel!: HTMLElement
+  private zoneLabel!: HTMLElement
+  private mmCtx!: CanvasRenderingContext2D
+  private tracker!: HTMLElement
+  private abilityEls: {
+    root: HTMLElement
+    cd: HTMLElement
+    text: HTMLElement
+  }[] = []
+  private autoBtn!: HTMLButtonElement
+  private logBox!: HTMLElement
+  private bannerBox!: HTMLElement
+  private panel!: HTMLElement
+  private panelBody!: HTMLElement
+  private tabs: Record<Tab, HTMLButtonElement> = {} as never
+  private badges: Record<string, HTMLElement> = {}
+  private tip!: HTMLElement
+  private death!: HTMLElement
+
+  private tab: Tab = 'bag'
+  private open = false
+  private needsPanel = true
+  private bannerTimer = 0
+
+  constructor(
+    private game: Game,
+    private renderer: Renderer,
+  ) {
+    this.root = document.getElementById('ui')!
+    this.buildVitals()
+    this.buildMap()
+    this.buildTracker()
+    this.buildActions()
+    this.buildLog()
+    this.buildBanner()
+    this.buildPanel()
+    this.buildTooltip()
+    this.buildDeath()
+    const zone = el('div')
+    zone.id = 'stickzone'
+    const stick = el('div')
+    stick.id = 'stick'
+    stick.appendChild(el('i'))
+    this.root.append(zone, stick)
+    this.stickZone = zone
+    this.stick = stick
+
+    game.hooks = {
+      log: (t, c) => this.log(t, c),
+      banner: (t, s) => this.banner(t, s),
+      dirty: () => {
+        this.needsPanel = true
+      },
+    }
+
+    window.addEventListener('keydown', this.onKey)
+  }
+
+  /* ================= construction ================= */
+
+  private buildVitals() {
+    const box = el('div', 'frame')
+    box.id = 'vitals'
+    box.innerHTML = `
+      <div class="v-row">
+        <span class="v-name">Wildmarch</span>
+        <span class="v-class">Warrior</span>
+        <span class="v-lvl">Lv 1</span>
+      </div>
+      <div class="bar hp"><div class="fill"></div><div class="label"></div></div>
+      <div class="bar xp"><div class="fill"></div><div class="label"></div></div>
+      <div class="v-stats"></div>`
+    this.root.appendChild(box)
+    this.lvlLabel = box.querySelector('.v-lvl')!
+    this.hpFill = box.querySelector('.bar.hp .fill')!
+    this.hpLabel = box.querySelector('.bar.hp .label')!
+    this.xpFill = box.querySelector('.bar.xp .fill')!
+    this.xpLabel = box.querySelector('.bar.xp .label')!
+    this.statLine = box.querySelector('.v-stats')!
+  }
+
+  private buildMap() {
+    const box = el('div', 'frame')
+    box.id = 'mapbox'
+    const zone = el('div')
+    zone.id = 'zonename'
+    const cv = el('canvas')
+    cv.id = 'minimap'
+    cv.width = 164
+    cv.height = 164
+    const gold = el('div')
+    gold.id = 'gold'
+    box.append(zone, cv, gold)
+    this.root.appendChild(box)
+    this.zoneLabel = zone
+    this.goldLabel = gold
+    const ctx = cv.getContext('2d')!
+    ctx.imageSmoothingEnabled = false
+    this.mmCtx = ctx
+  }
+
+  private buildTracker() {
+    const box = el('div', 'frame')
+    box.id = 'tracker'
+    this.root.appendChild(box)
+    this.tracker = box
+  }
+
+  private buildActions() {
+    const wrap = el('div')
+    wrap.id = 'actions'
+    const abilities = el('div')
+    abilities.id = 'abilities'
+    for (const ab of this.game.abilities) {
+      const node = el('div', 'ability clickable')
+      node.innerHTML = `<span class="key">${ab.key}</span>
+        <img alt="${ab.name}" src="${abilityIcon(ab.id)}">
+        <div class="cd"></div><div class="cdtext"></div>`
+      node.title = `${ab.name} — ${ab.desc}`
+      node.addEventListener('pointerdown', (e) => {
+        e.preventDefault()
+        this.game.useAbility(ab.id)
+      })
+      abilities.appendChild(node)
+      this.abilityEls.push({
+        root: node,
+        cd: node.querySelector('.cd')!,
+        text: node.querySelector('.cdtext')!,
+      })
+    }
+
+    const menu = el('div')
+    menu.id = 'menubar'
+    const mk = (label: string, key: string, tab: Tab, badge?: string) => {
+      const b = el('button', 'btn menu-btn')
+      b.innerHTML = `${label} <span style="opacity:.5">${key}</span>`
+      const badgeEl = el('span', 'badge hide')
+      b.appendChild(badgeEl)
+      if (badge) this.badges[badge] = badgeEl
+      b.addEventListener('click', () => this.toggle(tab))
+      menu.appendChild(b)
+    }
+    mk('Bag', 'I', 'bag', 'bag')
+    mk('Tasks', 'J', 'quests')
+    mk('Rewards', 'R', 'rewards', 'rewards')
+
+    wrap.append(abilities, menu)
+    this.root.appendChild(wrap)
+
+    const auto = el('button', 'btn')
+    auto.id = 'autobtn'
+    auto.innerHTML = 'Auto: Off<small>seek &amp; slay nearby beasts</small>'
+    auto.addEventListener('click', () => this.toggleAuto())
+    this.root.appendChild(auto)
+    this.autoBtn = auto
+  }
+
+  private buildLog() {
+    const box = el('div')
+    box.id = 'log'
+    this.root.appendChild(box)
+    this.logBox = box
+  }
+
+  private buildBanner() {
+    const box = el('div')
+    box.id = 'banner'
+    this.root.appendChild(box)
+    this.bannerBox = box
+  }
+
+  private buildPanel() {
+    const p = el('div', 'frame')
+    p.id = 'panel'
+    const head = el('div', 'p-head')
+    const mkTab = (id: Tab, label: string) => {
+      const b = el('button', 'tab')
+      b.textContent = label
+      b.addEventListener('click', () => this.show(id))
+      head.appendChild(b)
+      this.tabs[id] = b
+    }
+    mkTab('bag', 'Inventory')
+    mkTab('quests', 'Tasks')
+    mkTab('rewards', 'Rewards')
+    const close = el('button', 'btn p-close')
+    close.textContent = 'Close'
+    close.addEventListener('click', () => this.hide())
+    head.appendChild(close)
+    const body = el('div', 'p-body')
+    p.append(head, body)
+    this.root.appendChild(p)
+    this.panel = p
+    this.panelBody = body
+  }
+
+  private buildTooltip() {
+    const t = el('div', 'frame')
+    t.id = 'tip'
+    document.body.appendChild(t)
+    this.tip = t
+  }
+
+  private buildDeath() {
+    const d = el('div')
+    d.id = 'death'
+    d.innerHTML = `<div class="d-in"><h2>You Fell</h2><p>Recovering at the nearest camp…</p></div>`
+    this.root.appendChild(d)
+    this.death = d
+  }
+
+  /* ================= interaction ================= */
+
+  private onKey = (e: KeyboardEvent) => {
+    const k = e.key.toLowerCase()
+    if (k === 'i') this.toggle('bag')
+    else if (k === 'j') this.toggle('quests')
+    else if (k === 'r') this.toggle('rewards')
+    else if (k === 'escape') this.hide()
+    else if (k === 'q') this.game.useAbility('whirlwind')
+    else if (k === 'e') this.game.useAbility('secondwind')
+    else if (k === ' ') this.toggleAuto()
+    else if (k === 'f') this.toggleAutoEquip()
+  }
+
+  private toggleAuto() {
+    const p = this.game.player
+    p.auto = !p.auto
+    p.targetId = -1
+    this.autoBtn.classList.toggle('on', p.auto)
+    this.autoBtn.innerHTML = p.auto
+      ? 'Auto: On<small>seeking beasts…</small>'
+      : 'Auto: Off<small>seek &amp; slay nearby beasts</small>'
+    this.log(p.auto ? 'Auto-battle engaged' : 'Auto-battle disengaged', '#9ad0ff')
+  }
+
+  private toggleAutoEquip() {
+    this.game.autoEquip = !this.game.autoEquip
+    this.log(`Auto-equip upgrades ${this.game.autoEquip ? 'on' : 'off'}`, '#9ad0ff')
+    this.needsPanel = true
+  }
+
+  private toggle(tab: Tab) {
+    if (this.open && this.tab === tab) this.hide()
+    else this.show(tab)
+  }
+
+  private show(tab: Tab) {
+    this.tab = tab
+    this.open = true
+    this.panel.classList.add('open')
+    for (const id of ['bag', 'quests', 'rewards'] as Tab[]) {
+      this.tabs[id].classList.toggle('sel', id === tab)
+    }
+    this.needsPanel = true
+    this.renderPanel()
+  }
+
+  private hide() {
+    this.open = false
+    this.panel.classList.remove('open')
+    this.hideTip()
+  }
+
+  log(text: string, color?: string) {
+    const line = el('div', 'logline')
+    line.textContent = text
+    if (color) line.style.color = color
+    this.logBox.prepend(line)
+    while (this.logBox.childElementCount > 9) this.logBox.lastElementChild!.remove()
+    setTimeout(() => line.classList.add('fade'), 5200)
+    setTimeout(() => line.remove(), 5900)
+  }
+
+  banner(title: string, sub: string) {
+    this.bannerBox.innerHTML = `<div class="banner-t">${title}</div><div class="banner-s">${sub}</div>`
+    this.bannerBox.classList.remove('show')
+    void this.bannerBox.offsetWidth // restart the CSS animation
+    this.bannerBox.classList.add('show')
+    this.bannerTimer = 2.6
+  }
+
+  /* ================= per-frame ================= */
+
+  update(dt: number) {
+    const g = this.game
+    const p = g.player
+    const s = g.stats
+
+    const hpPct = clamp(p.hp / p.maxHp, 0, 1) * 100
+    this.hpFill.style.width = `${hpPct}%`
+    this.hpLabel.textContent = `${Math.ceil(p.hp)} / ${p.maxHp}`
+    this.xpFill.style.width = `${clamp(p.xp / p.xpNext, 0, 1) * 100}%`
+    this.xpLabel.textContent = ''
+    this.lvlLabel.textContent = `Lv ${p.level}`
+    this.statLine.innerHTML =
+      `<span>DMG <b>${Math.round(s.damage)}</b></span>` +
+      `<span>ARM <b>${s.armor}</b></span>` +
+      `<span>CRIT <b>${Math.round(s.crit * 100)}%</b></span>` +
+      `<span>SPD <b>${(1 / s.attackInterval).toFixed(2)}/s</b></span>`
+    this.goldLabel.textContent = `${p.gold.toLocaleString()} gold`
+
+    const camp = g.currentCamp
+    const region = g.world.regionAt(p.x, p.y)
+    this.zoneLabel.textContent = camp ? camp.name : region.name
+
+    for (let i = 0; i < this.abilityEls.length; i++) {
+      const ab = g.abilities[i]!
+      const node = this.abilityEls[i]!
+      const pct = ab.cd > 0 ? (ab.cd / ab.cooldown) * 100 : 0
+      node.cd.style.height = `${pct}%`
+      node.text.textContent = ab.cd > 0 ? `${Math.ceil(ab.cd)}` : ''
+      node.root.classList.toggle('ready', ab.cd <= 0)
+    }
+
+    this.death.classList.toggle('show', !p.alive)
+
+    const claim = g.claimableCount
+    this.setBadge('rewards', claim)
+    this.setBadge('bag', this.upgradesInBag())
+
+    this.drawMinimap()
+    this.updateTracker()
+
+    if (this.bannerTimer > 0) {
+      this.bannerTimer -= dt
+      if (this.bannerTimer <= 0) this.bannerBox.classList.remove('show')
+    }
+
+    if (this.open && this.needsPanel) this.renderPanel()
+  }
+
+  private setBadge(key: string, n: number) {
+    const b = this.badges[key]
+    if (!b) return
+    b.textContent = n > 0 ? `${n}` : ''
+    b.classList.toggle('hide', n <= 0)
+  }
+
+  private upgradesInBag(): number {
+    let n = 0
+    for (const it of this.game.bag) {
+      if (it && itemScore(it) > itemScore(this.game.equipped[it.slot])) n++
+    }
+    return n
+  }
+
+  private updateTracker() {
+    const g = this.game
+    const q = g.quest
+    if (!q) {
+      this.tracker.innerHTML = `<h4>Task</h4><div class="q-name">All tasks complete</div>
+        <div class="q-desc">The Wildmarch is yours. Keep hunting for rewards.</div>`
+      return
+    }
+    const goal = g.questGoal
+    const have = Math.min(g.questProgress, goal)
+    const objective = objectiveText(q.objective, have, goal)
+    this.tracker.innerHTML = `<h4>Current Task</h4>
+      <div class="q-name">${q.name}</div>
+      <div class="q-desc">${q.desc}</div>
+      <div class="q-obj${have >= goal ? ' done' : ''}">${objective}</div>
+      <div class="q-bar"><i style="width:${(have / goal) * 100}%"></i></div>`
+  }
+
+  private drawMinimap() {
+    const g = this.game
+    const ctx = this.mmCtx
+    const size = 164
+    const k = size / WORLD_SIZE
+    ctx.clearRect(0, 0, size, size)
+    ctx.imageSmoothingEnabled = false
+    ctx.drawImage(g.world.minimap, 0, 0, MAP_TILES, MAP_TILES, 0, 0, size, size)
+
+    // Visible slice of the world.
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)'
+    ctx.lineWidth = 1
+    ctx.strokeRect(
+      Math.round(this.renderer.viewX0 * k) + 0.5,
+      Math.round(this.renderer.viewY0 * k) + 0.5,
+      Math.round(this.renderer.vw * k),
+      Math.round(this.renderer.vh * k),
+    )
+
+    for (const e of g.enemies) {
+      if (!e.alive) continue
+      const d = Math.hypot(e.x - g.player.x, e.y - g.player.y)
+      if (d > 1500) continue
+      ctx.fillStyle = e.elite ? '#ff8a3c' : e.kind === 'bear' ? '#c96a4a' : '#d8483f'
+      const s = e.elite ? 3 : 2
+      ctx.fillRect(Math.round(e.x * k) - 1, Math.round(e.y * k) - 1, s, s)
+    }
+
+    for (const c of CAMPS) {
+      const cx = Math.round(c.x * k)
+      const cy = Math.round(c.y * k)
+      ctx.fillStyle = c.discovered ? '#f2c14e' : '#6d7383'
+      ctx.fillRect(cx - 3, cy - 3, 6, 6)
+      ctx.fillStyle = '#12151d'
+      ctx.fillRect(cx - 1, cy - 1, 2, 2)
+    }
+
+    const px = Math.round(g.player.x * k)
+    const py = Math.round(g.player.y * k)
+    ctx.fillStyle = '#0a0b11'
+    ctx.fillRect(px - 3, py - 3, 6, 6)
+    ctx.fillStyle = '#eaf1ff'
+    ctx.fillRect(px - 2, py - 2, 4, 4)
+  }
+
+  /* ================= panels ================= */
+
+  private renderPanel() {
+    this.needsPanel = false
+    const body = this.panelBody
+    body.innerHTML = ''
+    if (this.tab === 'bag') this.renderBag(body)
+    else if (this.tab === 'quests') this.renderQuests(body)
+    else this.renderRewards(body)
+  }
+
+  private renderBag(body: HTMLElement) {
+    const g = this.game
+    const wrap = el('div', 'inv-wrap')
+
+    const equipCol = el('div', 'equip-col')
+    equipCol.appendChild(el('div', 'col-h', 'Equipped'))
+    const grid = el('div', 'equip-grid')
+    for (const slot of SLOTS) {
+      const cell = el('div', 'equip-cell')
+      const item = g.equipped[slot]
+      const node = this.itemSlot(item, () => {
+        g.unequip(slot)
+        this.needsPanel = true
+      })
+      if (!item) node.appendChild(el('span', 'ph', SLOT_LABEL[slot].slice(0, 5)))
+      cell.append(node, el('label', undefined, SLOT_LABEL[slot]))
+      grid.appendChild(cell)
+    }
+    equipCol.appendChild(grid)
+
+    const s = g.stats
+    const stats = el('div', 'statblock')
+    stats.innerHTML = `
+      <div><span>Damage</span><b>${Math.round(s.damage)}</b></div>
+      <div><span>Attacks / sec</span><b>${(1 / s.attackInterval).toFixed(2)}</b></div>
+      <div><span>Crit chance</span><b>${Math.round(s.crit * 100)}%</b></div>
+      <div><span>Armour</span><b>${s.armor}</b></div>
+      <div><span>Max health</span><b>${s.maxHp}</b></div>
+      <div><span>Strength</span><b>${s.str}</b></div>
+      <div><span>Vitality</span><b>${s.vit}</b></div>
+      <div><span>Agility</span><b>${s.agi}</b></div>`
+    equipCol.appendChild(stats)
+
+    const toggle = el('button', 'btn')
+    toggle.style.marginTop = '10px'
+    toggle.style.width = '100%'
+    toggle.textContent = `Auto-equip: ${g.autoEquip ? 'On' : 'Off'}`
+    toggle.classList.toggle('on', g.autoEquip)
+    toggle.addEventListener('click', () => {
+      this.toggleAutoEquip()
+      this.renderPanel()
+    })
+    equipCol.appendChild(toggle)
+
+    const bagCol = el('div', 'bag-col')
+    const used = g.bag.filter(Boolean).length
+    const header = el('div', 'col-h', `Bag <span>${used} / ${g.bag.length}</span>`)
+    bagCol.appendChild(header)
+    const bagGrid = el('div', 'bag-grid')
+    g.bag.forEach((item, i) => {
+      const node = this.itemSlot(item, () => {
+        g.equipFromBag(i)
+        this.needsPanel = true
+      })
+      if (item) {
+        node.addEventListener('contextmenu', (e) => {
+          e.preventDefault()
+          g.sellFromBag(i)
+          this.hideTip()
+          this.needsPanel = true
+        })
+        if (itemScore(item) > itemScore(g.equipped[item.slot])) node.classList.add('up')
+      }
+      bagGrid.appendChild(node)
+    })
+    bagCol.appendChild(bagGrid)
+
+    const hint = el('div', 'col-h')
+    hint.style.marginTop = '10px'
+    hint.innerHTML = 'Click to equip &nbsp;·&nbsp; Right-click to sell'
+    bagCol.appendChild(hint)
+
+    wrap.append(equipCol, bagCol)
+    body.appendChild(wrap)
+  }
+
+  private itemSlot(item: Item | null, onClick: () => void): HTMLElement {
+    const node = el('div', 'slot')
+    if (item) {
+      node.classList.add(`r${item.rarity}`)
+      const img = el('img')
+      img.src = itemIcon(item.icon, item.rarity)
+      img.alt = item.name
+      node.appendChild(img)
+      node.addEventListener('click', onClick)
+      node.addEventListener('pointerenter', (e) => this.showTip(item, e as PointerEvent))
+      node.addEventListener('pointermove', (e) => this.moveTip(e as PointerEvent))
+      node.addEventListener('pointerleave', () => this.hideTip())
+    }
+    return node
+  }
+
+  private renderQuests(body: HTMLElement) {
+    const g = this.game
+    QUESTS.forEach((q, i) => {
+      const done = i < g.questIndex
+      const active = i === g.questIndex
+      const card = el('div', `card${done ? ' done' : active ? '' : ' locked'}`)
+      const main = el('div', 'cmain')
+      const goal = q.objective.type === 'kill' ? q.objective.count : 1
+      const have = done ? goal : active ? Math.min(g.questProgress, goal) : 0
+      const objective = objectiveText(q.objective, have, goal)
+      main.innerHTML = `<div class="ctitle">${q.name}</div>
+        <div class="cdesc">${q.desc}</div>
+        <div class="cdesc" style="margin-top:3px">${objective}</div>
+        <div class="crew">${rewardText(q.reward)}</div>`
+      card.appendChild(main)
+      card.appendChild(
+        el('div', 'cprog', done ? '<span class="tick">✔</span>' : active ? 'Active' : 'Locked'),
+      )
+      body.appendChild(card)
+    })
+  }
+
+  private renderRewards(body: HTMLElement) {
+    const g = this.game
+    const intro = el('div', 'col-h')
+    intro.innerHTML = 'Milestone rewards &nbsp;·&nbsp; claim them once the goal is met'
+    body.appendChild(intro)
+
+    for (const m of MILESTONES) {
+      const value = g.metricValue(m.metric)
+      const ready = value >= m.threshold
+      const claimed = g.claimed.has(m.id)
+      const card = el('div', `card${claimed ? ' done' : ready ? '' : ' locked'}`)
+      const main = el('div', 'cmain')
+      main.innerHTML = `<div class="ctitle">${m.name}</div>
+        <div class="cdesc">${m.desc} — ${Math.min(value, m.threshold)} / ${m.threshold}</div>
+        <div class="crew">${rewardText(m.reward)}</div>`
+      card.appendChild(main)
+      if (claimed) {
+        card.appendChild(el('div', 'cprog', '<span class="tick">✔</span> Claimed'))
+      } else if (ready) {
+        const btn = el('button', 'btn on')
+        btn.textContent = 'Claim'
+        btn.addEventListener('click', () => {
+          g.claimMilestone(m.id)
+          this.renderPanel()
+        })
+        card.appendChild(btn)
+      } else {
+        card.appendChild(el('div', 'cprog', `${Math.round((value / m.threshold) * 100)}%`))
+      }
+      body.appendChild(card)
+    }
+  }
+
+  /* ================= tooltip ================= */
+
+  private showTip(item: Item, e: PointerEvent) {
+    const equipped = this.game.equipped[item.slot]
+    const color = RARITY_COLORS[item.rarity]
+    const lines = statLines(item)
+      .map((l) => `<div class="t-stat">${l}</div>`)
+      .join('')
+    let cmp = ''
+    if (equipped && equipped.uid !== item.uid) {
+      const delta = itemScore(item) - itemScore(equipped)
+      const cls = delta > 0 ? 'up' : delta < 0 ? 'down' : ''
+      cmp = `<div class="t-cmp">Equipped: ${equipped.name}<br>
+        <span class="${cls}">${delta > 0 ? '▲ upgrade' : delta < 0 ? '▼ downgrade' : '≈ sidegrade'}</span></div>`
+    }
+    this.tip.innerHTML = `
+      <div class="t-name" style="color:${color}">${item.name}</div>
+      <div class="t-sub">${rarityName(item.rarity)} ${SLOT_LABEL[item.slot]} · ilvl ${item.ilvl}</div>
+      ${lines}
+      ${cmp}
+      <div class="t-hint">Sells for ${item.value}g</div>`
+    this.tip.classList.add('show')
+    this.moveTip(e)
+  }
+
+  private moveTip(e: PointerEvent) {
+    const pad = 14
+    const w = this.tip.offsetWidth
+    const h = this.tip.offsetHeight
+    let x = e.clientX + pad
+    let y = e.clientY + pad
+    if (x + w > window.innerWidth - 8) x = e.clientX - w - pad
+    if (y + h > window.innerHeight - 8) y = window.innerHeight - h - 8
+    this.tip.style.left = `${Math.max(8, x)}px`
+    this.tip.style.top = `${Math.max(8, y)}px`
+  }
+
+  private hideTip() {
+    this.tip.classList.remove('show')
+  }
+}
+
+function objectiveText(objective: QuestObjective, have: number, goal: number): string {
+  if (objective.type === 'kill') return `${labelFor(objective.kind)} — ${have} / ${goal}`
+  const camp = CAMPS.find((c) => c.id === objective.camp)
+  return `Reach ${camp?.name ?? 'the camp'}`
+}
+
+function labelFor(kind: string): string {
+  if (kind === 'any') return 'Beasts slain'
+  if (kind === 'elite') return 'Elites slain'
+  if (kind === 'wolf') return 'Wolves slain'
+  return 'Bears slain'
+}
+
+function rewardText(reward: {
+  xp: number
+  gold: number
+  item?: { base: string; rarity: number; ilvl: number }
+}): string {
+  const bits: string[] = []
+  if (reward.xp) bits.push(`${reward.xp} xp`)
+  if (reward.gold) bits.push(`${reward.gold} gold`)
+  if (reward.item) bits.push(`${rarityName(reward.item.rarity)} item`)
+  return bits.join(' · ')
+}

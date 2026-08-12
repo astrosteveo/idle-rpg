@@ -1,0 +1,887 @@
+/* ============================================================
+   Wildmarch — global shell
+   The game is drawn entirely into #game (canvas). #ui is a
+   transparent HUD layer stacked on top, like a normal game.
+   ============================================================ */
+
+:root {
+  --ink: #0b0d12;
+  --panel: rgba(14, 17, 24, 0.93);
+  --panel-edge: #3d4657;
+  --panel-edge-hi: #6b7790;
+  --text: #e8e4d8;
+  --text-dim: #9aa3b2;
+  --gold: #f2c14e;
+  --hp: #d8483f;
+  --hp-dark: #5c1c19;
+  --xp: #5fb0e8;
+  --rage: #e08b3a;
+
+  --r0: #b9c0cc; /* common    */
+  --r1: #62c46a; /* uncommon  */
+  --r2: #4e9df5; /* rare      */
+  --r3: #b064e8; /* epic      */
+  --r4: #f0913a; /* legendary */
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #05060a;
+  color: var(--text);
+  font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  overscroll-behavior: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#game {
+  position: fixed;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  background: #0a1410;
+}
+
+#ui {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right))
+    max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+#ui > * {
+  position: absolute;
+}
+
+.clickable {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/* ---------- shared chrome ---------- */
+
+.frame {
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 1px #05070c,
+    0 6px 22px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.btn {
+  pointer-events: auto;
+  cursor: pointer;
+  background: linear-gradient(#2b3243, #1a1f2b);
+  border: 1px solid var(--panel-edge);
+  border-radius: 3px;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 6px 10px;
+  text-transform: uppercase;
+  transition: background 0.1s, border-color 0.1s, transform 0.05s;
+}
+.btn:hover {
+  background: linear-gradient(#39435a, #232937);
+  border-color: #7d8aa3;
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn.on {
+  background: linear-gradient(#3f7a4a, #24512e);
+  border-color: #7ed48d;
+  color: #eafcee;
+}
+
+/* ============================================================
+   TOP LEFT — vitals
+   ============================================================ */
+
+#vitals {
+  top: max(10px, env(safe-area-inset-top));
+  left: max(10px, env(safe-area-inset-left));
+  width: 268px;
+  padding: 8px 10px 9px;
+}
+
+.v-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+.v-name {
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  color: #fff;
+}
+.v-class {
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.v-lvl {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--gold);
+}
+
+.bar {
+  position: relative;
+  height: 13px;
+  background: #10131b;
+  border: 1px solid #000;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 4px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+.bar > .fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  transition: width 0.12s linear;
+}
+.bar > .label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-shadow: 0 1px 0 #000, 0 0 3px #000;
+}
+.bar.hp > .fill {
+  background: linear-gradient(#e0584d, #9d2b24);
+}
+.bar.xp {
+  height: 7px;
+}
+.bar.xp > .fill {
+  background: linear-gradient(#79c6f5, #2f78bb);
+}
+
+.v-stats {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.v-stats b {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* ============================================================
+   TOP RIGHT — minimap + zone
+   ============================================================ */
+
+#mapbox {
+  top: max(10px, env(safe-area-inset-top));
+  right: max(10px, env(safe-area-inset-right));
+  padding: 7px;
+  width: 178px;
+}
+#zonename {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gold);
+  text-align: center;
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#minimap {
+  display: block;
+  width: 164px;
+  height: 164px;
+  border: 1px solid #000;
+  background: #0a0d13;
+  image-rendering: pixelated;
+}
+#gold {
+  margin-top: 6px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--gold);
+}
+
+/* ============================================================
+   RIGHT — quest tracker
+   ============================================================ */
+
+#tracker {
+  top: 250px;
+  right: max(10px, env(safe-area-inset-right));
+  width: 210px;
+  padding: 8px 10px;
+}
+#tracker h4 {
+  margin: 0 0 5px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+.q-name {
+  color: var(--gold);
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+.q-desc {
+  color: var(--text-dim);
+  font-size: 10px;
+  margin-bottom: 6px;
+}
+.q-obj {
+  font-size: 11px;
+}
+.q-obj.done {
+  color: #7ed48d;
+}
+.q-bar {
+  height: 4px;
+  background: #10131b;
+  border: 1px solid #000;
+  margin-top: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.q-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--gold);
+}
+
+/* ============================================================
+   BOTTOM RIGHT — abilities + menu
+   ============================================================ */
+
+#actions {
+  right: max(10px, env(safe-area-inset-right));
+  bottom: max(10px, env(safe-area-inset-bottom));
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+#abilities {
+  display: flex;
+  gap: 8px;
+}
+.ability {
+  pointer-events: auto;
+  cursor: pointer;
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 4px;
+  border: 1px solid var(--panel-edge);
+  background: radial-gradient(120% 120% at 30% 20%, #333d52, #161b25);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+.ability img {
+  width: 32px;
+  height: 32px;
+  image-rendering: pixelated;
+}
+.ability .key {
+  position: absolute;
+  top: 1px;
+  left: 3px;
+  font-size: 9px;
+  color: var(--text-dim);
+}
+.ability .cd {
+  position: absolute;
+  inset: auto 0 0 0;
+  background: rgba(6, 8, 12, 0.78);
+  height: 0%;
+  transition: height 0.08s linear;
+}
+.ability .cdtext {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+  color: #fff;
+  text-shadow: 0 1px 2px #000;
+}
+.ability.ready {
+  border-color: #8d9ab5;
+  box-shadow: 0 0 8px rgba(160, 190, 255, 0.25);
+}
+
+#menubar {
+  display: flex;
+  gap: 6px;
+}
+.menu-btn {
+  position: relative;
+}
+.badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #d8483f;
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  border: 1px solid #000;
+}
+.badge:empty,
+.badge.hide {
+  display: none;
+}
+
+/* ============================================================
+   BOTTOM LEFT — joystick + auto toggle + log
+   ============================================================ */
+
+/* The stick zone is a large invisible catcher. It must sit *below* the real
+   controls that overlap it, or it swallows their taps. */
+#stickzone {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 46%;
+  height: 60%;
+  pointer-events: auto;
+  touch-action: none;
+  z-index: 4;
+}
+
+#stick {
+  position: absolute;
+  width: 118px;
+  height: 118px;
+  margin: -59px 0 0 -59px;
+  border-radius: 50%;
+  border: 2px solid rgba(220, 230, 255, 0.28);
+  background: radial-gradient(circle, rgba(20, 26, 38, 0.42), rgba(20, 26, 38, 0.16));
+  opacity: 0;
+  transition: opacity 0.14s;
+  pointer-events: none;
+}
+#stick.live {
+  opacity: 1;
+}
+#stick {
+  z-index: 5;
+}
+#stick > i {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 50px;
+  height: 50px;
+  margin: -25px 0 0 -25px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #cdd9f2, #6c7893);
+  border: 2px solid rgba(0, 0, 0, 0.45);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5);
+}
+
+#autobtn {
+  left: max(10px, env(safe-area-inset-left));
+  bottom: max(10px, env(safe-area-inset-bottom));
+  padding: 10px 14px;
+  font-size: 12px;
+  z-index: 8;
+}
+#autobtn small {
+  display: block;
+  font-size: 9px;
+  color: var(--text-dim);
+  text-transform: none;
+  letter-spacing: 0;
+}
+#autobtn.on small {
+  color: #bdf0c8;
+}
+
+#log {
+  left: max(10px, env(safe-area-inset-left));
+  bottom: 62px;
+  width: 300px;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 2px;
+  max-height: 190px;
+  overflow: hidden;
+}
+.logline {
+  font-size: 11px;
+  padding: 2px 7px;
+  background: rgba(8, 10, 15, 0.62);
+  border-left: 2px solid var(--panel-edge);
+  border-radius: 0 2px 2px 0;
+  animation: fadein 0.18s ease-out;
+  width: fit-content;
+  max-width: 100%;
+}
+@keyframes fadein {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+}
+.logline.fade {
+  opacity: 0;
+  transition: opacity 0.5s;
+}
+
+/* ============================================================
+   CENTER — banners
+   ============================================================ */
+
+#banner {
+  left: 50%;
+  top: 16%;
+  transform: translateX(-50%);
+  text-align: center;
+  pointer-events: none;
+  white-space: nowrap;
+  /* Hidden by default: the .show animation reveals it, and stripping the
+     class again must leave it invisible rather than fully opaque. */
+  opacity: 0;
+}
+.banner-t {
+  font-size: 26px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--gold);
+  text-shadow: 0 2px 0 #000, 0 0 22px rgba(242, 193, 78, 0.4);
+}
+.banner-s {
+  font-size: 12px;
+  color: var(--text);
+  letter-spacing: 0.1em;
+  text-shadow: 0 1px 2px #000;
+}
+#banner.show {
+  animation: banner 2.6s ease-out forwards;
+}
+@keyframes banner {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
+  12% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* ============================================================
+   PANELS (inventory / quests / rewards)
+   ============================================================ */
+
+#panel {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(720px, calc(100vw - 24px));
+  height: min(500px, calc(100vh - 120px));
+  display: none;
+  flex-direction: column;
+  pointer-events: auto;
+  z-index: 20;
+}
+#panel.open {
+  display: flex;
+}
+
+.p-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 8px 0;
+  border-bottom: 1px solid var(--panel-edge);
+}
+.tab {
+  background: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-radius: 3px 3px 0 0;
+  position: relative;
+  top: 1px;
+}
+.tab.sel {
+  color: var(--gold);
+  border-color: var(--panel-edge);
+  background: #191e29;
+}
+.p-close {
+  margin-left: auto;
+  margin-bottom: 4px;
+}
+.p-body {
+  flex: 1;
+  overflow: auto;
+  padding: 12px;
+  scrollbar-width: thin;
+  scrollbar-color: #3d4657 transparent;
+}
+
+/* inventory layout */
+.inv-wrap {
+  display: flex;
+  gap: 16px;
+  height: 100%;
+  flex-wrap: wrap;
+}
+.equip-col {
+  width: 214px;
+  flex: 0 0 auto;
+}
+.bag-col {
+  flex: 1 1 300px;
+  min-width: 260px;
+}
+.col-h {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 7px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.col-h span {
+  margin-left: auto;
+  color: var(--text);
+}
+
+.slot {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  border: 1px solid #2a3140;
+  border-radius: 3px;
+  background: #12161f;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.slot img {
+  width: 34px;
+  height: 34px;
+  image-rendering: pixelated;
+}
+.slot .ph {
+  font-size: 8px;
+  color: #444c5e;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.slot.r0 {
+  border-color: #5a6272;
+}
+.slot.r1 {
+  border-color: var(--r1);
+  box-shadow: inset 0 0 8px rgba(98, 196, 106, 0.18);
+}
+.slot.r2 {
+  border-color: var(--r2);
+  box-shadow: inset 0 0 8px rgba(78, 157, 245, 0.2);
+}
+.slot.r3 {
+  border-color: var(--r3);
+  box-shadow: inset 0 0 9px rgba(176, 100, 232, 0.24);
+}
+.slot.r4 {
+  border-color: var(--r4);
+  box-shadow: inset 0 0 10px rgba(240, 145, 58, 0.28);
+}
+.slot.up::after {
+  content: "▲";
+  position: absolute;
+  top: -2px;
+  right: 1px;
+  font-size: 9px;
+  color: #7ed48d;
+  text-shadow: 0 0 3px #000;
+}
+
+.equip-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 44px);
+  gap: 8px;
+  justify-content: center;
+}
+.equip-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.equip-cell label {
+  font-size: 8px;
+  color: #5c6577;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.bag-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 44px);
+  gap: 6px;
+}
+
+.statblock {
+  margin-top: 12px;
+  padding: 8px 10px;
+  background: #12161f;
+  border: 1px solid #2a3140;
+  border-radius: 3px;
+  font-size: 11px;
+}
+.statblock div {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-dim);
+}
+.statblock b {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* quests & rewards lists */
+.card {
+  border: 1px solid #2a3140;
+  border-radius: 3px;
+  background: #12161f;
+  padding: 9px 11px;
+  margin-bottom: 8px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.card.done {
+  border-color: #2f5a37;
+  background: #121c15;
+}
+.card.locked {
+  opacity: 0.45;
+}
+.card .cmain {
+  flex: 1;
+  min-width: 0;
+}
+.card .ctitle {
+  color: var(--text);
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+.card .cdesc {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+.card .crew {
+  color: var(--gold);
+  font-size: 10px;
+  margin-top: 4px;
+}
+.card .cprog {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.tick {
+  color: #7ed48d;
+  font-size: 15px;
+}
+
+/* tooltip */
+#tip {
+  position: fixed;
+  z-index: 40;
+  width: 234px;
+  padding: 8px 10px;
+  display: none;
+  pointer-events: none;
+  font-size: 11px;
+}
+#tip.show {
+  display: block;
+}
+#tip .t-name {
+  font-size: 12px;
+  margin-bottom: 1px;
+}
+#tip .t-sub {
+  color: var(--text-dim);
+  font-size: 10px;
+  margin-bottom: 6px;
+}
+#tip .t-stat {
+  color: #b8c4d8;
+}
+#tip .t-cmp {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid #2a3140;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+#tip .up {
+  color: #7ed48d;
+}
+#tip .down {
+  color: #d8746c;
+}
+#tip .t-hint {
+  margin-top: 6px;
+  color: #6f7a8d;
+  font-size: 10px;
+}
+
+/* death overlay */
+#death {
+  inset: 0;
+  display: none;
+  place-items: center;
+  background: rgba(40, 6, 6, 0.45);
+  pointer-events: auto;
+  z-index: 30;
+  backdrop-filter: blur(2px);
+}
+#death.show {
+  display: grid;
+}
+#death .d-in {
+  text-align: center;
+}
+#death h2 {
+  font-size: 30px;
+  letter-spacing: 0.2em;
+  color: #e8615a;
+  text-shadow: 0 2px 0 #000;
+  margin: 0 0 6px;
+}
+#death p {
+  color: var(--text-dim);
+  margin: 0 0 16px;
+}
+
+/* Phones, and short landscape windows, where the desktop HUD would collide
+   with itself. The quest tracker drops out — it is duplicated in the Tasks
+   panel — and everything else shrinks. */
+@media (max-width: 860px), (max-height: 560px) {
+  #tracker {
+    display: none;
+  }
+  #log {
+    width: 190px;
+    bottom: 68px;
+    max-height: 92px;
+  }
+  .logline {
+    font-size: 10px;
+  }
+  #vitals {
+    width: 186px;
+    padding: 6px 8px 7px;
+  }
+  .v-name {
+    font-size: 11px;
+  }
+  .v-stats {
+    font-size: 9px;
+    gap: 7px;
+  }
+  #mapbox {
+    width: 106px;
+    padding: 5px;
+  }
+  #minimap {
+    width: 96px;
+    height: 96px;
+  }
+  #zonename {
+    font-size: 9px;
+  }
+  #gold {
+    font-size: 10px;
+  }
+  .ability {
+    width: 46px;
+    height: 46px;
+  }
+  .ability img {
+    width: 26px;
+    height: 26px;
+  }
+  .btn {
+    padding: 5px 8px;
+    font-size: 10px;
+  }
+  #autobtn {
+    padding: 7px 10px;
+    font-size: 11px;
+  }
+  .banner-t {
+    font-size: 18px;
+  }
+  .banner-s {
+    font-size: 10px;
+  }
+  #panel {
+    height: calc(100vh - 68px);
+    top: 6px;
+    transform: translateX(-50%);
+  }
+}
