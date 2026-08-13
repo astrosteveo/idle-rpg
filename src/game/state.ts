@@ -10,6 +10,8 @@
 import { clamp, dist, facingToDir, rng, type Rng } from '../core/math'
 import {
   BEHAVIOUR,
+  BOSS,
+  BOSSES,
   CRIT_MULT,
   DESPERATE_BELOW,
   ELITE,
@@ -32,6 +34,8 @@ import {
   UNIQUE_DROP_CHANCE,
   WHIRLWIND,
   baseMods,
+  bossById,
+  bossWindow,
   buildMods,
   damageVs,
   deriveStats,
@@ -59,10 +63,12 @@ import {
   uidMark,
   uniqueDefOf,
 } from './loot'
+import { beastSheetScale, type BeastSheetId } from '../render/sprites'
 import type { OfflineReport } from './offline'
 import { SAVE_VERSION, type Save } from './save'
 import {
   CAMPS,
+  LANDMARKS,
   REGIONS,
   TILE,
   World,
@@ -109,6 +115,8 @@ interface ViewRect {
 export interface Counters {
   kills: number
   elite: number
+  /** World bosses felled. Every apex kill is also an elite kill. */
+  bosses: number
   gold: number
   quests: number
   /**
@@ -166,7 +174,20 @@ export class Game {
   talents: string[] = []
   /** Relics this character has ever found, so no elite drops one twice. */
   foundUniques = new Set<string>()
-  counters: Counters = { kills: 0, elite: 0, gold: 0, quests: 0, species: perSpecies(0) }
+  counters: Counters = {
+    kills: 0,
+    elite: 0,
+    bosses: 0,
+    gold: 0,
+    quests: 0,
+    species: perSpecies(0),
+  }
+  /**
+   * Which scheduling window this character has already taken, per boss. World
+   * state in principle — a server would own it — but private until there is
+   * one, so it lives in the save alongside everything else per-character.
+   */
+  bossCleared: Record<string, number> = {}
   questIndex = 0
   questProgress = 0
   claimed = new Set<string>()
@@ -194,6 +215,8 @@ export class Game {
   private view: ViewRect = { x0: -1e6, y0: -1e6, x1: 1e6, y1: 1e6 }
   private swingApplied = false
   private outOfCombat = 0
+  /** Seconds until the next boss-window check; per frame would be waste. */
+  private bossCheck = 0
   private roamTarget: { x: number; y: number } | null = null
 
   constructor(world = new World()) {
@@ -265,6 +288,7 @@ export class Game {
       claimed: [...this.claimed],
       discovered: [...this.discovered],
       seenLandmarks: [...this.seenLandmarks],
+      bossCleared: { ...this.bossCleared },
       huntingGround: this.huntingGround,
       groundPinned: this.groundPinned,
       autoEquip: this.autoEquip,
@@ -304,6 +328,7 @@ export class Game {
     this.claimed = new Set(s.claimed)
     this.discovered = new Set(s.discovered)
     this.seenLandmarks = new Set(s.seenLandmarks)
+    this.bossCleared = { ...s.bossCleared }
     this.huntingGround = s.huntingGround
     this.groundPinned = s.groundPinned ?? false
     this.autoEquip = s.autoEquip
@@ -532,31 +557,54 @@ export class Game {
     }
   }
 
-  private spawnEnemy(node: SpawnNode, x: number, y: number) {
-    const type = ENEMIES[node.kind]
-    const elite = node.elite
-    const level = node.level
-    const maxHp = Math.round(type.hp(level) * (elite ? ELITE.hpMult : 1))
+  /**
+   * The one place an `Enemy` is built. A boss is an ordinary beast with much
+   * larger numbers and no den, so it goes through here too rather than being a
+   * second copy of thirty fields that would drift out of step.
+   */
+  private makeEnemy(spec: {
+    kind: EnemyKind
+    level: number
+    elite: boolean
+    x: number
+    y: number
+    nodeId: number
+    name: string
+    sheet: BeastSheetId
+    hpMult: number
+    dmgMult: number
+    xpMult: number
+    goldMult: number
+    aggroMult: number
+    bossId?: string
+  }): Enemy {
+    const type = ENEMIES[spec.kind]
+    const maxHp = Math.round(type.hp(spec.level) * spec.hpMult)
+    // Body size follows the art it is wearing, so an apex that draws at 1.7x
+    // also collides and reaches at 1.7x rather than fighting from inside a
+    // sprite three times its hitbox.
+    const sizeMult = beastSheetScale(spec.sheet)
     const e: Enemy = {
       id: this.nextId++,
-      kind: node.kind,
-      elite,
-      level,
-      name: elite ? type.eliteName : type.name,
-      x,
-      y,
+      kind: spec.kind,
+      elite: spec.elite,
+      level: spec.level,
+      name: spec.name,
+      sheet: spec.sheet,
+      x: spec.x,
+      y: spec.y,
       vx: 0,
       vy: 0,
-      radius: type.radius * (elite ? 1.2 : 1),
-      scale: elite ? 1 : 1,
+      radius: type.radius * sizeMult,
+      scale: 1,
       facing: this.rand() * Math.PI * 2,
       dir: 0,
       hp: maxHp,
       maxHp,
-      dmg: type.dmg(level) * (elite ? ELITE.dmgMult : 1),
-      speed: type.speed * (elite ? ELITE.speedMult : 1),
-      xpValue: Math.round(type.xp(level) * (elite ? ELITE.xpMult : 1)),
-      goldValue: Math.round(type.gold(level) * (elite ? ELITE.goldMult : 1)),
+      dmg: type.dmg(spec.level) * spec.dmgMult,
+      speed: type.speed * (spec.elite ? ELITE.speedMult : 1),
+      xpValue: Math.round(type.xp(spec.level) * spec.xpMult),
+      goldValue: Math.round(type.gold(spec.level) * spec.goldMult),
       alive: true,
       state: 'idle',
       stateT: this.rand.range(0, 2),
@@ -566,18 +614,85 @@ export class Game {
       windup: 0,
       special: 0,
       hitFlash: 0,
-      nodeId: node.id,
-      ax: x,
-      ay: y,
-      wx: x,
-      wy: y,
-      aggroRange: type.aggroRange * (elite ? 1.15 : 1),
+      nodeId: spec.nodeId,
+      ax: spec.x,
+      ay: spec.y,
+      wx: spec.x,
+      wy: spec.y,
+      aggroRange: type.aggroRange * spec.aggroMult,
       leash: type.leash,
-      attackRange: type.attackRange * (elite ? 1.15 : 1),
+      attackRange: type.attackRange * sizeMult,
       deadT: 0,
+      bossId: spec.bossId,
     }
     this.enemies.push(e)
+    return e
+  }
+
+  private spawnEnemy(node: SpawnNode, x: number, y: number) {
+    const type = ENEMIES[node.kind]
+    const elite = node.elite
+    const e = this.makeEnemy({
+      kind: node.kind,
+      level: node.level,
+      elite,
+      x,
+      y,
+      nodeId: node.id,
+      name: elite ? type.eliteName : type.name,
+      sheet: elite ? type.eliteSheet : type.sheet,
+      hpMult: elite ? ELITE.hpMult : 1,
+      dmgMult: elite ? ELITE.dmgMult : 1,
+      xpMult: elite ? ELITE.xpMult : 1,
+      goldMult: elite ? ELITE.goldMult : 1,
+      aggroMult: elite ? 1.15 : 1,
+    })
     node.alive.push(e.id)
+  }
+
+  /* ================= world bosses ================= */
+
+  /**
+   * Apex beasts stand at fixed places on a clock derived from wall time, so
+   * every player's schedule is the same schedule. Whether *this* character has
+   * already taken the current window is private, and lives in the save —
+   * standing in for the shared state a server will own once there is one.
+   */
+  private stepBosses(dt: number) {
+    this.bossCheck -= dt
+    if (this.bossCheck > 0) return
+    this.bossCheck = 1
+    const window = bossWindow(Date.now())
+    for (const def of BOSSES) {
+      if (this.bossCleared[def.id] === window) continue
+      if (this.enemies.some((e) => e.alive && e.bossId === def.id)) continue
+      const site = LANDMARKS.find((l) => l.id === def.site)
+      if (!site) continue
+      this.makeEnemy({
+        kind: def.kind,
+        level: def.level,
+        elite: true,
+        x: site.x,
+        y: site.y,
+        nodeId: -1,
+        name: def.name,
+        sheet: def.sheet,
+        hpMult: def.hpMult,
+        dmgMult: def.dmgMult,
+        xpMult: def.xpMult,
+        goldMult: def.goldMult,
+        aggroMult: BOSS.aggroMult,
+        bossId: def.id,
+      })
+      // Silent on the first pass: a character logging in should not be handed
+      // five lines about beasts that have been standing there all along.
+      if (this.time > 3) this.hooks.log(`${def.name} walks at ${site.name}.`, '#f0913a')
+    }
+  }
+
+  /** Whether an apex is standing at its place right now. */
+  bossIsUp(id: string): boolean {
+    return this.enemies.some((e) => e.alive && e.bossId === id)
   }
 
   /* ================= main step ================= */
@@ -613,6 +728,7 @@ export class Game {
     this.stepEnemies(dt)
     this.stepRegen(dt)
     this.stepSpawns()
+    this.stepBosses(dt)
     this.stepTransient(dt)
   }
 
@@ -644,7 +760,7 @@ export class Game {
 
     let target = this.enemyById(p.targetId)
     if (!target || !target.alive || target.state === 'return' || dist(p.x, p.y, target.x, target.y) > 1100) {
-      target = this.nearestEnemy(p.x, p.y, 1000, true)
+      target = this.nearestEnemy(p.x, p.y, 1000, true, true)
       p.targetId = target ? target.id : -1
     }
 
@@ -1258,11 +1374,10 @@ export class Game {
     e.alive = false
     e.hp = 0
     e.state = 'dead'
-    const type = ENEMIES[e.kind]
     this.corpses.push({
       x: e.x,
       y: e.y,
-      sheet: e.elite ? type.eliteSheet : type.sheet,
+      sheet: e.sheet,
       lean: this.rand() < 0.5 ? Math.PI / 2 : -Math.PI / 2,
       t: 0,
     })
@@ -1277,12 +1392,18 @@ export class Game {
       color: e.elite ? '#ff9b5c' : '#d8c9a8',
     })
 
-    // Bookkeeping for the node this beast belonged to.
+    // Bookkeeping for the node this beast belonged to. A boss has none — its
+    // return is the clock's business, not a den's.
     const node = this.world.nodes[e.nodeId]
     if (node) {
       const i = node.alive.indexOf(e.id)
       if (i >= 0) node.alive.splice(i, 1)
       node.respawnAt = this.time + (e.elite ? 45 : 9 + this.rand() * 8)
+    }
+    if (e.bossId) {
+      this.bossCleared[e.bossId] = bossWindow(Date.now())
+      const def = bossById(e.bossId)
+      if (def) this.hooks.banner(def.name, `${def.title} — felled`)
     }
 
     this.creditKill(e)
@@ -1306,6 +1427,7 @@ export class Game {
     this.counters.kills++
     this.counters.species[e.kind]++
     if (e.elite) this.counters.elite++
+    if (e.bossId) this.counters.bosses++
     this.advanceQuestOnKill(e)
     const tierAfter = masteryTier(this.counters.species[e.kind])
     if (tierAfter > tierBefore) this.announceMastery(e.kind, tierAfter)
@@ -1379,7 +1501,10 @@ export class Game {
    */
   private rollUnique(e: Enemy, scale: number) {
     if (!e.elite) return
-    if (this.rand() > UNIQUE_DROP_CHANCE * scale) return
+    // An apex is the one encounter a player can plan to be present for, so it
+    // is also the reliable way to finish a set.
+    const chance = e.bossId ? BOSS.uniqueChance : UNIQUE_DROP_CHANCE
+    if (this.rand() > chance * scale) return
     const pool = UNIQUES.filter(
       (u) => !this.foundUniques.has(u.id) && (u.from === null || u.from === e.kind),
     )
@@ -1563,7 +1688,9 @@ export class Game {
     if (!q || q.objective.type !== 'kill') return
     const want = q.objective.kind
     // A wolf quest counts alphas too — they are still wolves.
-    const match = want === 'any' || (want === 'elite' ? e.elite : want === e.kind)
+    const match =
+      want === 'any' ||
+      (want === 'elite' ? e.elite : want === 'boss' ? !!e.bossId : want === e.kind)
     if (!match) return
     this.questProgress++
     if (this.questProgress >= q.objective.count) this.completeQuest()
@@ -1631,6 +1758,8 @@ export class Game {
         return this.counters.kills
       case 'elite':
         return this.counters.elite
+      case 'bosses':
+        return this.counters.bosses
       case 'gold':
         return this.counters.gold
       case 'level':
@@ -1749,11 +1878,25 @@ export class Game {
     return null
   }
 
-  nearestEnemy(x: number, y: number, maxDist: number, huntable: boolean): Enemy | null {
+  /**
+   * `skipBosses` is for the auto-battle *seek* only. Auto-battle picking a
+   * fight with an apex would walk a level 3 character into a level 10 wall,
+   * die, respawn, and walk back — forever. Swinging at one that is already in
+   * reach still works, so choosing to fight a boss stays the player's call and
+   * only the choosing is taken away from the robot.
+   */
+  nearestEnemy(
+    x: number,
+    y: number,
+    maxDist: number,
+    huntable: boolean,
+    skipBosses = false,
+  ): Enemy | null {
     let best: Enemy | null = null
     let bestD = maxDist
     for (const e of this.enemies) {
       if (!e.alive) continue
+      if (skipBosses && e.bossId) continue
       if (huntable && e.state === 'return') continue
       const d = dist(x, y, e.x, e.y) - e.radius
       if (d < bestD) {

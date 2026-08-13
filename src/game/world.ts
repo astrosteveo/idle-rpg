@@ -254,8 +254,11 @@ export const LANDMARKS: Landmark[] = [
   {
     id: 'hollow-oak',
     name: 'The Hollow Oak',
-    x: 3300,
-    y: 1450,
+    // Moved off the lake it originally straddled: a landmark's whole disc has
+    // to be dry, or a third of its grove is planted in water and the apex that
+    // holds it stands in the shallows.
+    x: 3150,
+    y: 1600,
     radius: 175,
     kind: 'grove',
     blurb: 'Struck once, a long time ago, and still holding the whole clearing open.',

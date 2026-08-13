@@ -8,7 +8,6 @@ import { clamp, hash2 } from '../core/math'
 import { CAMPS, TILE, WORLD_SIZE, type PropInstance } from '../game/world'
 import type { Game } from '../game/state'
 import type { Enemy } from '../game/types'
-import { ENEMIES } from '../game/content'
 import { CHUNK_PX, CHUNK_TILES, Terrain } from './terrain'
 import { drawTextCentered } from './font'
 import type { Art } from './sprites'
@@ -329,6 +328,22 @@ export class Renderer {
       pixelDisc(ctx, sx, sy, e.radius * 1.7, e.radius * 0.7)
     }
 
+    // An apex stands on ground of its own — a wide pool with a dashed ring at
+    // its edge, so it reads as a fixed encounter from across the field rather
+    // than as a slightly larger elite.
+    if (e.bossId) {
+      const rx = e.radius * 2.9
+      const ry = e.radius * 1.2
+      ctx.fillStyle = 'rgba(242,193,78,0.1)'
+      pixelDisc(ctx, sx, sy, rx, ry)
+      ctx.fillStyle = 'rgba(242,193,78,0.45)'
+      for (let i = 0; i < 72; i++) {
+        if (i % 4 === 0) continue
+        const a = (i / 72) * Math.PI * 2
+        ctx.fillRect(Math.round(sx + Math.cos(a) * rx), Math.round(sy + Math.sin(a) * ry), 2, 2)
+      }
+    }
+
     // A boar pawing the ground holds the wind-up pose; the run itself is the
     // walk cycle at speed, so the tell is unmistakable and the charge is not.
     let col: number
@@ -550,10 +565,9 @@ export class Renderer {
 
   /* ---------------- helpers ---------------- */
 
-  /** The sheet a beast is drawn from — elite or not. */
+  /** The sheet a beast is drawn from — ordinary body, elite or apex. */
   private sheetOf(e: Enemy): Sheet {
-    const type = ENEMIES[e.kind]
-    return this.art.beasts[e.elite ? type.eliteSheet : type.sheet]
+    return this.art.beasts[e.sheet]
   }
 
   private blitFrame(

@@ -508,6 +508,142 @@ export const ELITE = {
 }
 
 /* ------------------------------------------------------------------ *
+ * World bosses
+ * ------------------------------------------------------------------ */
+
+/**
+ * An apex beast, standing at a named place on a clock everybody shares.
+ *
+ * The schedule is derived from wall-clock time rather than from anything this
+ * character has done, so every player's answer to "when does the Greytooth
+ * walk?" is the same answer. That is the whole point: a common world makes
+ * "it holds the Hollow Oak on the half hour" transferable knowledge, and
+ * transferable knowledge is the cheapest social content there is.
+ */
+export const BOSS = {
+  /** Real minutes between windows. */
+  periodMinutes: 30,
+  /**
+   * Apex relic chance. Far above an ordinary elite's, because a boss is the
+   * one encounter a player can plan to be present for, and the reward for
+   * turning up on time should be the thing they are missing.
+   */
+  uniqueChance: 0.45,
+  /** How far out an apex notices you — they hold their ground, not a leash. */
+  aggroMult: 1.5,
+}
+
+/** Which scheduling window a moment falls in. Identical on every client. */
+export function bossWindow(nowMs: number): number {
+  return Math.floor(nowMs / (BOSS.periodMinutes * 60_000))
+}
+
+/** Milliseconds until the next window opens. */
+export function bossWindowRemaining(nowMs: number): number {
+  const period = BOSS.periodMinutes * 60_000
+  return period - (nowMs % period)
+}
+
+export interface BossDef {
+  id: string
+  name: string
+  /** The line under the name, in the bestiary and on arrival. */
+  title: string
+  kind: EnemyKind
+  /** Id of the `Landmark` it holds. Fixed, and the same for everybody. */
+  site: string
+  level: number
+  sheet: BeastSheetId
+  hpMult: number
+  dmgMult: number
+  xpMult: number
+  goldMult: number
+  lore: string
+}
+
+/**
+ * One apex to a species, each holding the landmark its kind is named for, and
+ * each a clear step above the band it stands in — a boss is somewhere to aim,
+ * not somewhere to grind.
+ */
+export const BOSSES: BossDef[] = [
+  {
+    id: 'greytooth',
+    name: 'The Greytooth',
+    title: 'Apex of Wolfden Thicket',
+    kind: 'wolf',
+    site: 'hollow-oak',
+    level: 10,
+    sheet: 'greytooth',
+    hpMult: 14,
+    dmgMult: 2.1,
+    xpMult: 12,
+    goldMult: 11,
+    lore: 'The pack that will not den. It has been the same animal for longer than that is possible.',
+  },
+  {
+    id: 'thornfell-sow',
+    name: 'The Thornfell Sow',
+    title: 'Apex of Thornfell Downs',
+    kind: 'boar',
+    site: 'bonefield',
+    level: 11,
+    sheet: 'thornfellSow',
+    hpMult: 15,
+    dmgMult: 2.2,
+    xpMult: 12,
+    goldMult: 11,
+    lore: 'Whatever is buried in the Bonefield, she put it there, and she is still not finished.',
+  },
+  {
+    id: 'stonebrow',
+    name: 'Stonebrow',
+    title: 'Apex of Stonewatch Ridge',
+    kind: 'bear',
+    site: 'wind-altar',
+    level: 14,
+    sheet: 'stonebrow',
+    hpMult: 16,
+    dmgMult: 2.3,
+    xpMult: 13,
+    goldMult: 12,
+    lore: 'The altar was raised to something. The rangers have stopped arguing about whether it worked.',
+  },
+  {
+    id: 'mirefen-widow',
+    name: 'The Widow of Mirefen',
+    title: 'Apex of Mirefen Hollow',
+    kind: 'spider',
+    site: 'drowned-chapel',
+    level: 16,
+    sheet: 'mirefenWidow',
+    hpMult: 16,
+    dmgMult: 2.4,
+    xpMult: 13,
+    goldMult: 12,
+    lore: 'The chapel did not drown. It was wrapped, and the water came afterwards.',
+  },
+  {
+    id: 'gallows-king',
+    name: 'The Gallows King',
+    title: 'Apex of Ravencrag',
+    kind: 'corvid',
+    site: 'rookstone',
+    level: 20,
+    sheet: 'gallowsKing',
+    hpMult: 18,
+    dmgMult: 2.5,
+    xpMult: 15,
+    goldMult: 14,
+    lore: 'Every rook on the crag watches the Rookstone. This is what they are watching for.',
+  },
+]
+
+export function bossById(id: string): BossDef | null {
+  return BOSSES.find((b) => b.id === id) ?? null
+}
+
+/* ------------------------------------------------------------------ *
  * Reward scaling
  * ------------------------------------------------------------------ */
 
@@ -660,7 +796,7 @@ export const AFFIX_POOL: (keyof ItemStats)[] = ['str', 'vit', 'agi', 'armor']
  * ------------------------------------------------------------------ */
 
 export type QuestObjective =
-  | { type: 'kill'; kind: EnemyKind | 'elite' | 'any'; count: number }
+  | { type: 'kill'; kind: EnemyKind | 'elite' | 'boss' | 'any'; count: number }
   | { type: 'reach'; camp: string }
 
 export interface QuestReward {
@@ -783,6 +919,16 @@ export const QUESTS: QuestDef[] = [
     objective: { type: 'kill', kind: 'corvid', count: 30 },
     reward: { xp: 3400, gold: 1600, item: { base: 'band', rarity: 4, ilvl: 19 } },
   },
+  {
+    id: 'q14',
+    name: 'Apex',
+    giver: 'Wildmarch',
+    desc:
+      'Five beasts hold the named places, and each of them keeps to its own hour. ' +
+      'Be somewhere on time, for once.',
+    objective: { type: 'kill', kind: 'boss', count: 1 },
+    reward: { xp: 4200, gold: 2200, item: { base: 'maul', rarity: 4, ilvl: 20 } },
+  },
 ]
 
 /* ------------------------------------------------------------------ *
@@ -797,6 +943,7 @@ export const QUESTS: QuestDef[] = [
 export type Metric =
   | 'kills'
   | 'elite'
+  | 'bosses'
   | 'gold'
   | 'level'
   | 'quests'
@@ -931,6 +1078,22 @@ export const MILESTONES: MilestoneDef[] = [
     metric: 'kills',
     threshold: 500,
     reward: { xp: 4800, gold: 3200, item: { base: 'sword', rarity: 4, ilvl: 20 } },
+  },
+  {
+    id: 'm-boss-1',
+    name: 'Kingslayer',
+    desc: 'Kill a world boss',
+    metric: 'bosses',
+    threshold: 1,
+    reward: { xp: 2000, gold: 1500, item: { base: 'helm', rarity: 4, ilvl: 18 } },
+  },
+  {
+    id: 'm-boss-10',
+    name: 'The Whole Table',
+    desc: 'Kill 10 world bosses',
+    metric: 'bosses',
+    threshold: 10,
+    reward: { xp: 8000, gold: 5000, item: { base: 'maul', rarity: 4, ilvl: 22 } },
   },
   {
     id: 'm-level-15',

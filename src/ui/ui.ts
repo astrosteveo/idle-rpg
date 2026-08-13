@@ -7,6 +7,8 @@
  */
 import { clamp } from '../core/math'
 import {
+  BOSS,
+  BOSSES,
   ENEMIES,
   MASTERY_TIERS,
   MILESTONES,
@@ -14,6 +16,7 @@ import {
   RARITY_COLORS,
   TALENT_ROWS,
   UNIQUES,
+  bossWindowRemaining,
   damageVs,
   masteryTier,
   type UniqueDef,
@@ -577,9 +580,17 @@ export class UI {
       if (!g.seenLandmarks.has(l.id)) continue
       const lx = Math.round(l.x * k)
       const ly = Math.round(l.y * k)
-      ctx.fillStyle = '#cbb489'
+      // A site with its apex standing on it burns; the rest are quiet marks.
+      // Knowing where to be is most of a world boss.
+      const boss = BOSSES.find((b) => b.site === l.id && g.bossIsUp(b.id))
+      ctx.fillStyle = boss ? '#f0913a' : '#cbb489'
       ctx.fillRect(lx - 1, ly - 3, 2, 6)
       ctx.fillRect(lx - 3, ly - 1, 6, 2)
+      if (boss) {
+        ctx.fillRect(lx - 2, ly - 2, 4, 4)
+        ctx.fillStyle = 'rgba(240,145,58,0.35)'
+        ctx.fillRect(lx - 4, ly - 4, 8, 8)
+      }
     }
 
     for (const c of CAMPS) {
@@ -747,6 +758,8 @@ export class UI {
       wrap.appendChild(card)
     }
 
+    wrap.appendChild(this.apexSection())
+
     const wandering = UNIQUES.filter((u) => u.from === null)
     if (wandering.length) {
       const card = el('div', 'beast')
@@ -761,6 +774,49 @@ export class UI {
     }
 
     body.appendChild(wrap)
+  }
+
+  /**
+   * The apex roster. The clock is the content here: it is derived from wall
+   * time rather than from anything this character did, so what it says is what
+   * it says for everybody — which is what makes it worth telling someone.
+   */
+  private apexSection(): HTMLElement {
+    const g = this.game
+    const now = Date.now()
+    const card = el('div', 'beast')
+    card.appendChild(
+      el(
+        'div',
+        'g-head',
+        `<b>Apex Beasts</b><span>${g.counters.bosses.toLocaleString()} felled</span>`,
+      ),
+    )
+    card.appendChild(
+      el(
+        'div',
+        'g-desc',
+        `Five beasts hold the named places. Each keeps to the same hour for every
+         hunter in the march — a new one walks every ${BOSS.periodMinutes} minutes,
+         and the next is in ${duration(bossWindowRemaining(now) / 1000)}.`,
+      ),
+    )
+
+    const list = el('div', 'b-relics')
+    for (const def of BOSSES) {
+      const site = LANDMARKS.find((l) => l.id === def.site)
+      const up = g.bossIsUp(def.id)
+      const row = el('div', 'relic')
+      row.classList.toggle('unfound', !up)
+      row.innerHTML = `<b style="color:${up ? RARITY_COLORS[4] : '#8b93a5'}">${def.name}</b>
+        <span>${def.title} · level ${def.level} · ${
+          site ? site.name : 'somewhere'
+        } — ${up ? 'walking now' : `returns in ${duration(bossWindowRemaining(now) / 1000)}`}</span>
+        <em>${def.lore}</em>`
+      list.appendChild(row)
+    }
+    card.appendChild(list)
+    return card
   }
 
   private relicList(defs: UniqueDef[]): HTMLElement {
@@ -1059,9 +1115,10 @@ function objectiveText(objective: QuestObjective, have: number, goal: number): s
   return `Reach ${camp?.name ?? 'the camp'}`
 }
 
-function labelFor(kind: EnemyKind | 'elite' | 'any'): string {
+function labelFor(kind: EnemyKind | 'elite' | 'boss' | 'any'): string {
   if (kind === 'any') return 'Beasts slain'
   if (kind === 'elite') return 'Elites slain'
+  if (kind === 'boss') return 'World bosses felled'
   return `${ENEMIES[kind].plural} slain`
 }
 

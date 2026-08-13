@@ -15,7 +15,7 @@ import type { Counters } from './state'
 import { ENEMY_KINDS, perSpecies, type Item, type Slot } from './types'
 import type { BiomeId } from './world'
 
-export const SAVE_VERSION = 4
+export const SAVE_VERSION = 5
 export const SAVE_KEY = 'wildmarch.save'
 
 export interface SavedPlayer {
@@ -32,7 +32,7 @@ export interface SavedPlayer {
   auto: boolean
 }
 
-export interface SaveV4 {
+export interface SaveV5 {
   v: number
   /** Saves are tied to the world they were made in. */
   seed: number
@@ -50,6 +50,13 @@ export interface SaveV4 {
   discovered: string[]
   /** Named places this character has stood in. Grants nothing; remembers. */
   seenLandmarks: string[]
+  /**
+   * Boss id → the scheduling window this character has already taken. The
+   * schedule itself is derived from wall time and is the same for everyone;
+   * only "have I had this one yet" is per-character, and only because there is
+   * no server to own it.
+   */
+  bossCleared: Record<string, number>
   huntingGround: BiomeId | null
   /** Whether the ground was chosen deliberately or is still following the player. */
   groundPinned: boolean
@@ -65,7 +72,7 @@ export interface SaveV4 {
 }
 
 /** The schema at the current version. Everything outside this file uses it. */
-export type Save = SaveV4
+export type Save = SaveV5
 
 /**
  * Structural check plus a forward migration, in one pass, because callers only
@@ -94,6 +101,14 @@ export function readSave(x: unknown, expectSeed: number): Save | null {
   // v3 → v4: named landmarks did not exist. An existing character has simply
   // never noticed any of them, and finds them the next time it walks past.
   const seenLandmarks = Array.isArray(s.seenLandmarks) ? s.seenLandmarks.filter(isId) : []
+  // v4 → v5: world bosses did not exist, so no window has been taken and the
+  // first of each is standing when the character arrives.
+  const bossCleared: Record<string, number> = {}
+  if (s.bossCleared && typeof s.bossCleared === 'object') {
+    for (const [id, win] of Object.entries(s.bossCleared)) {
+      if (typeof win === 'number' && Number.isFinite(win)) bossCleared[id] = win
+    }
+  }
 
   return {
     ...(s as Save),
@@ -101,6 +116,7 @@ export function readSave(x: unknown, expectSeed: number): Save | null {
     talents,
     foundUniques,
     seenLandmarks,
+    bossCleared,
     counters: readCounters(s.counters),
   }
 }
@@ -119,6 +135,7 @@ function readCounters(x: unknown): Counters {
   return {
     kills: count(c.kills),
     elite: count(c.elite),
+    bosses: count(c.bosses),
     gold: count(c.gold),
     quests: count(c.quests),
     species,

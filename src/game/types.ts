@@ -1,4 +1,4 @@
-import type { IconKind } from '../render/sprites'
+import type { BeastSheetId, IconKind } from '../render/sprites'
 
 /** Sprite sheet row. See `facingToDir` for the octant each value covers. */
 export type Dir = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
@@ -87,6 +87,12 @@ export interface Enemy {
   elite: boolean
   level: number
   name: string
+  /**
+   * Which art this individual wears. Carried on the beast rather than looked
+   * up from its species, because an apex is neither the ordinary body nor the
+   * elite one — it has its own.
+   */
+  sheet: BeastSheetId
   x: number
   y: number
   /**
@@ -117,7 +123,13 @@ export interface Enemy {
   /** Cooldown on this species' trick, kept apart from the melee swing. */
   special: number
   hitFlash: number
+  /**
+   * Index into `World.nodes`, or -1 for a beast no spawn node owns — a world
+   * boss answers to the clock rather than to a den.
+   */
   nodeId: number
+  /** Id in `BOSSES` when this is an apex beast. */
+  bossId?: string
   ax: number
   ay: number
   wx: number

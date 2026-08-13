@@ -601,6 +601,65 @@ export const BROODMOTHER_PAL: BeastPalette = {
   claw: '#f2e8dc',
 }
 
+/* Apex palettes. One to a species, deliberately further from their ordinary
+ * colours than an elite is — a world boss has to be recognisable at a glance
+ * from across the field, not on inspection. */
+
+export const GREYTOOTH_PAL: BeastPalette = {
+  fur: '#c3cbd8',
+  furD: '#7d8798',
+  furL: '#e8eef6',
+  belly: '#f4f8fd',
+  nose: '#2b3140',
+  eye: '#63d6e8',
+  claw: '#ffffff',
+}
+
+export const STONEBROW_PAL: BeastPalette = {
+  fur: '#6a6f63',
+  furD: '#41453c',
+  furL: '#8d9481',
+  belly: '#a8b092',
+  nose: '#20231c',
+  eye: '#9ff06a',
+  claw: '#e6ecd6',
+}
+
+export const THORNFELL_PAL: BeastPalette = {
+  fur: '#2f2a2a',
+  furD: '#171414',
+  furL: '#544a46',
+  belly: '#6b5a52',
+  nose: '#0d0b0b',
+  eye: '#ff3b2f',
+  claw: '#f6e2c4',
+}
+
+export const WIDOW_PAL: BeastPalette = {
+  fur: '#d9cfc0',
+  furD: '#8e8375',
+  furL: '#f2ece0',
+  belly: '#a45cd8',
+  nose: '#3a3128',
+  eye: '#b04ef0',
+  claw: '#fffaf0',
+}
+
+/**
+ * Still the darkest thing in the game, but not so dark it disappears against
+ * Ravencrag's own grey — the wing highlight has to carry the whole silhouette,
+ * so it is lifted well clear of the body.
+ */
+export const GALLOWS_PAL: BeastPalette = {
+  fur: '#2b2740',
+  furD: '#13111c',
+  furL: '#615887',
+  belly: '#3c3752',
+  nose: '#f2c14e',
+  eye: '#f2c14e',
+  claw: '#f2c14e',
+}
+
 export const STORMCROW_PAL: BeastPalette = {
   fur: '#39324f',
   furD: '#211c30',
@@ -1787,19 +1846,33 @@ function makeCorpse(sheet: Sheet): HTMLCanvasElement {
  * size — the entry says so rather than being a second body.
  */
 const BEAST_SHEETS = {
-  wolf: { spec: WOLF_SPEC },
+  wolf: { spec: WOLF_SPEC, pal: null, scale: 1 },
   alphaWolf: { spec: WOLF_SPEC, pal: ALPHA_WOLF_PAL, scale: 1.25 },
-  bear: { spec: BEAR_SPEC },
+  bear: { spec: BEAR_SPEC, pal: null, scale: 1 },
   elderBear: { spec: BEAR_SPEC, pal: ELDER_BEAR_PAL, scale: 1.2 },
-  boar: { spec: BOAR_SPEC },
+  boar: { spec: BOAR_SPEC, pal: null, scale: 1 },
   ironhideBoar: { spec: BOAR_SPEC, pal: IRONHIDE_BOAR_PAL, scale: 1.22 },
-  spider: { spec: SPIDER_SPEC },
+  spider: { spec: SPIDER_SPEC, pal: null, scale: 1 },
   broodmother: { spec: SPIDER_SPEC, pal: BROODMOTHER_PAL, scale: 1.3 },
-  corvid: { spec: CORVID_SPEC },
+  corvid: { spec: CORVID_SPEC, pal: null, scale: 1 },
   stormcrow: { spec: CORVID_SPEC, pal: STORMCROW_PAL, scale: 1.35 },
-} satisfies Record<string, { spec: BeastSpec; pal?: BeastPalette; scale?: number }>
+  greytooth: { spec: WOLF_SPEC, pal: GREYTOOTH_PAL, scale: 1.7 },
+  stonebrow: { spec: BEAR_SPEC, pal: STONEBROW_PAL, scale: 1.5 },
+  thornfellSow: { spec: BOAR_SPEC, pal: THORNFELL_PAL, scale: 1.6 },
+  mirefenWidow: { spec: SPIDER_SPEC, pal: WIDOW_PAL, scale: 1.7 },
+  gallowsKing: { spec: CORVID_SPEC, pal: GALLOWS_PAL, scale: 1.9 },
+} satisfies Record<string, { spec: BeastSpec; pal: BeastPalette | null; scale: number }>
 
 export type BeastSheetId = keyof typeof BEAST_SHEETS
+
+/**
+ * How much larger than its base body this sheet draws. The simulation reads it
+ * so a beast's collision radius and reach match the art it is wearing — the one
+ * number the two halves have to agree on.
+ */
+export function beastSheetScale(id: BeastSheetId): number {
+  return BEAST_SHEETS[id].scale
+}
 
 export interface Art {
   warrior: Sheet
@@ -1812,7 +1885,7 @@ export function buildArt(): Art {
   const beasts = {} as Record<BeastSheetId, Sheet>
   const corpses: Record<string, HTMLCanvasElement> = {}
   for (const [name, def] of Object.entries(BEAST_SHEETS)) {
-    const sheet = makeBeastSheet(def.spec, 'pal' in def ? def.pal : undefined, 'scale' in def ? def.scale : 1)
+    const sheet = makeBeastSheet(def.spec, def.pal ?? undefined, def.scale)
     beasts[name as BeastSheetId] = sheet
     corpses[name] = makeCorpse(sheet)
   }
