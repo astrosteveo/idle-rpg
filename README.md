@@ -29,6 +29,8 @@ npm run preview  # serve the production build
 | Inventory | `I` | **Bag** |
 | Tasks | `J` | **Tasks** |
 | Rewards | `R` | **Rewards** |
+| Talents | `T` | **Talents** |
+| Bestiary | `B` | **Beasts** |
 | Hunting grounds | `H` | **Hunt** |
 | Toggle auto-equip | `F` | Button inside the Inventory panel |
 | Close a panel | `Esc` | **Close** |
@@ -78,7 +80,28 @@ the area is clear.
 five rarities, a base stat scaled by item level, and one affix per rarity tier.
 Six equipment slots. Everything auto-loots into a 40-slot bag; a full bag
 auto-sells the overflow. Auto-equip (on by default) takes anything that scores
-higher than what you are wearing.
+higher than what you are wearing — except relics, which it will neither equip
+nor replace.
+
+**Talents.** Five rows unlocking at levels 2, 5, 8, 11 and 14, three choices each, one pick
+per row. They specialise something you already do — how you swing, how Whirlwind behaves,
+how you recover, how you finish — rather than trickling more stats. A pick is final until
+you retrain, which costs 120 gold per level and is the only real drain on the purse in the
+game.
+
+**Relics.** Six unique items, one per equipment slot, each changing a rule instead of a
+number: Whirlwind leaving burning ground, every kill restoring health or returning Second
+Wind, a guaranteed crit on anything unwounded, double damage to one species and less to
+everything else, a faster stride that shakes pursuit sooner. Their base stats are roughly
+half an ordinary item's *on purpose* — `itemScore` cannot rank a rule, so a relic that also
+won on stats would be equipped automatically and decide nothing. They sit outside auto-equip
+in both directions, cannot be sold, and never drop twice. Elites carry them, awake or
+offline.
+
+**Bestiary and mastery.** Every kill is already counted, so mastery is free content on data
+the game was keeping anyway: four tiers per species at 25, 100, 300 and 750 kills, each
+sharpening what you do to that species and blunting what it does back. The panel doubles as
+the relic index — undiscovered ones show only their slot.
 
 **Quests.** A seven-step chain, tracked on the HUD, auto-turning-in as you
 complete each: cull wolves, find the two undiscovered camps, clear bears off the

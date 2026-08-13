@@ -102,6 +102,31 @@ The project is headed toward a shared world where one player's progress must not
 everyone's — so anything per-character belongs on `Game` and in the save, and `CAMPS` /
 `REGIONS` stay immutable placement data.
 
+**A relic is outside auto-equip in both directions.** `itemScore` collapses gear to one
+number, and the whole value of a unique is a rule that number cannot see — so `Game.addItem`
+routes anything with `Item.unique` to `stowUnique` instead, never auto-equips it, and never
+auto-replaces a unique that is already worn (`better` checks `current?.unique` first).
+Uniques are also unsellable (`value: 0`, guarded in `sellFromBag`), because there is one of
+each, `foundUniques` stops it dropping again, and the bag-overflow auto-sell would otherwise
+destroy content permanently. A full bag makes room for a relic by selling its worst
+*ordinary* item. Let a score decide any of this and the one real decision in the game
+silently unmakes itself.
+
+**One `Mods` bag, one fold, one stacking rule per field.** Talents, worn relics and beast
+mastery all return `Partial<Mods>`, and `buildMods` folds them in a fixed order — used by
+both `Game.computeMods` and `offline.ts`, so the live game and the ledger can never disagree
+about a character's rules. `COMBINE` in `content.ts` is a `Record<keyof Mods, ...>`: a new
+modifier field that forgets to declare whether it multiplies, adds or ORs fails the build
+rather than defaulting to something wrong. `mods.leashMult` is the one field with a
+direction — it is clamped to ≤1 in `shouldGiveUp`, because content may end a chase *sooner*
+and must never stretch one.
+
+**Mastery is a view, not a record.** `masteryTier` reads `Counters.wolf` / `Counters.bear`
+directly and nothing new is stored, so the bestiary can never disagree with the kill totals
+the rest of the HUD shows. The price is that `recalc` has to run when a tier threshold is
+crossed — `creditKill` samples the tier before and after incrementing, and
+`applyOfflineReport` recalcs once at the end.
+
 **Two reward curves, doing different jobs.** `rewardScale` governs gold, drop chance and
 drop item level; it floors at 15% below you and 4% above, so a trivial beast is still worth
 looting and a tapped high-level beast is not worth farming. `xpScale` governs experience
@@ -109,6 +134,12 @@ alone and reaches exactly zero eight levels down, so a region can be *outgrown*.
 `rewardScale` for xp re-enables infinite grinding in the starter zone; using `xpScale` for
 loot kills drops entirely. Neither ever touches kills, quests, counters or milestones —
 acknowledgment is unconditional, only the payout scales.
+
+**The save migrates forward, it does not get discarded.** `save.ts` is at v2 and `readSave`
+does the structural check and the migration in one pass, because callers only want the
+answer to "can I play this?". A save from a *different seed* is still thrown away — every
+camp and den would be somewhere else — but an older schema version is filled in with
+defaults. Keep additions additive and this stays a two-line change per version.
 
 **The save deliberately omits the world.** Terrain, props and spawn placement are pure
 functions of the seed, and the `Game` constructor fills every node on boot — so `hydrate`
@@ -191,8 +222,15 @@ entities interleave correctly.
 Balance changes almost never need simulation code. `src/game/content.ts` holds enemy
 statlines, drop rates, the XP curve, stat derivation, ability numbers, item bases and
 affixes, the quest chain, the milestone table, both reward curves (`rewardScale`,
-`xpScale` / `XP_FALLOFF`) and the offline model (`OFFLINE`). Region placement, level bands,
-pack sizes and node counts are the `REGIONS` array in `src/game/world.ts`.
+`xpScale` / `XP_FALLOFF`) and the offline model (`OFFLINE`). It also holds everything Tier II
+added: `TALENT_ROWS` (five rows, three choices each, unlocked by level),
+`RESPEC_COST_PER_LEVEL`, `UNIQUES` and `UNIQUE_DROP_CHANCE`, `EMBER` (the burning ground
+Emberfang leaves), `MASTERY_TIERS`, and the `Mods` / `COMBINE` tables everything above feeds.
+Region placement, level bands, pack sizes and node counts are the `REGIONS` array in
+`src/game/world.ts`.
+
+A new talent or relic is normally a table entry plus, at most, one field on `Mods` and its
+`COMBINE` rule — the simulation reads `this.mods`, never the tables.
 
 One known gap, documented at the end of the README: offline accrual at `OFFLINE.efficiency`
 0.72 is nearly as fast as playing, so a single night away can carry a character past level
