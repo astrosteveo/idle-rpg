@@ -42,7 +42,23 @@ export interface Item {
   unique?: string
 }
 
-export type EnemyKind = 'wolf' | 'bear'
+/**
+ * Every species in the game, in one list. Species-keyed tables are declared as
+ * `Record<EnemyKind, ...>`, so adding a name here fails the build everywhere
+ * that would otherwise have silently kept a two-species assumption.
+ */
+export const ENEMY_KINDS = ['wolf', 'bear'] as const
+
+export type EnemyKind = (typeof ENEMY_KINDS)[number]
+
+/** One number per species — the shape mastery, relics and the ledger all use. */
+export type BySpecies = Record<EnemyKind, number>
+
+export function perSpecies(value: number): BySpecies {
+  const out = {} as BySpecies
+  for (const kind of ENEMY_KINDS) out[kind] = value
+  return out
+}
 
 export type EnemyState = 'idle' | 'wander' | 'chase' | 'attack' | 'return' | 'dead'
 

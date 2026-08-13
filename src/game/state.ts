@@ -32,9 +32,11 @@ import {
   WHIRLWIND,
   baseMods,
   buildMods,
+  damageVs,
   deriveStats,
   masteryTier,
   mitigate,
+  resistFrom,
   rewardScale,
   rowOfTalent,
   talentById,
@@ -42,6 +44,7 @@ import {
   xpForLevel,
   xpScale,
   type DerivedStats,
+  type Metric,
   type Mods,
   type QuestReward,
   type TalentRow,
@@ -71,10 +74,13 @@ import {
 } from './world'
 import {
   SLOTS,
+  perSpecies,
   type Ability,
+  type BySpecies,
   type Corpse,
   type Effect,
   type Enemy,
+  type EnemyKind,
   type FloatText,
   type Ground,
   type Item,
@@ -99,11 +105,15 @@ interface ViewRect {
 
 export interface Counters {
   kills: number
-  wolf: number
-  bear: number
   elite: number
   gold: number
   quests: number
+  /**
+   * Kills by species. Mastery and the bestiary are views of this record, so it
+   * is the one place a species' tally is written — a flat field per animal was
+   * what made a third species expensive.
+   */
+  species: BySpecies
 }
 
 export class Game {
@@ -153,7 +163,7 @@ export class Game {
   talents: string[] = []
   /** Relics this character has ever found, so no elite drops one twice. */
   foundUniques = new Set<string>()
-  counters: Counters = { kills: 0, wolf: 0, bear: 0, elite: 0, gold: 0, quests: 0 }
+  counters: Counters = { kills: 0, elite: 0, gold: 0, quests: 0, species: perSpecies(0) }
   questIndex = 0
   questProgress = 0
   claimed = new Set<string>()
@@ -241,7 +251,7 @@ export class Game {
       bag: this.bag.slice(),
       equipped: { ...this.equipped },
       nextUid: uidMark(),
-      counters: { ...this.counters },
+      counters: { ...this.counters, species: { ...this.counters.species } },
       questIndex: this.questIndex,
       questProgress: this.questProgress,
       claimed: [...this.claimed],
@@ -276,7 +286,10 @@ export class Game {
     // Before any fresh drop is rolled, or new uids collide with restored gear.
     restoreUidMark(s.nextUid)
 
-    this.counters = { ...s.counters }
+    // Copied rather than adopted: the save object outlives this call — the
+    // offline ledger is still reading it — and counting a kill must not reach
+    // back into it.
+    this.counters = { ...s.counters, species: { ...s.counters.species } }
     this.questIndex = s.questIndex
     this.questProgress = s.questProgress
     this.claimed = new Set(s.claimed)
@@ -354,7 +367,7 @@ export class Game {
    */
   applyOfflineReport(r: OfflineReport) {
     this.counters.kills += r.kills
-    this.counters[r.kind] += r.kills
+    this.counters.species[r.kind] += r.kills
     this.counters.elite += r.eliteKills
 
     const q = this.quest
@@ -401,7 +414,7 @@ export class Game {
     return buildMods(
       SLOTS.map((s) => this.equipped[s]?.unique),
       this.talents,
-      this.counters,
+      this.counters.species,
     )
   }
 
@@ -739,7 +752,7 @@ export class Game {
     let m = mult * this.frenzyMult()
     let certain = false
     if (target) {
-      m *= target.kind === 'wolf' ? this.mods.vsWolf : this.mods.vsBear
+      m *= damageVs(this.mods, target.kind)
       if (target.hp >= target.maxHp) {
         m *= this.mods.openerMult
         certain = this.mods.ambush
@@ -1062,7 +1075,7 @@ export class Game {
     const p = this.player
     if (!p.alive || p.invuln > 0) return
     const raw = e.dmg * this.rand.range(0.9, 1.12)
-    const resist = e.kind === 'wolf' ? this.mods.fromWolf : this.mods.fromBear
+    const resist = resistFrom(this.mods, e.kind)
     const amount = Math.max(1, Math.round(mitigate(raw, this.stats.armor, e.level) * resist))
     p.hp -= amount
     p.hitFlash = 0.18
@@ -1130,12 +1143,12 @@ export class Game {
   private creditKill(e: Enemy) {
     // Acknowledgment is unconditional; only the payout scales. Mastery reads
     // off these counters, so its tier can only ever move here.
-    const tierBefore = masteryTier(this.counters[e.kind])
+    const tierBefore = masteryTier(this.counters.species[e.kind])
     this.counters.kills++
-    this.counters[e.kind]++
+    this.counters.species[e.kind]++
     if (e.elite) this.counters.elite++
     this.advanceQuestOnKill(e)
-    const tierAfter = masteryTier(this.counters[e.kind])
+    const tierAfter = masteryTier(this.counters.species[e.kind])
     if (tierAfter > tierBefore) this.announceMastery(e.kind, tierAfter)
 
     // Gold and drops keep the floored curve — a trivial beast is still worth
@@ -1441,14 +1454,10 @@ export class Game {
 
   /* ---- milestones ---- */
 
-  metricValue(metric: string): number {
+  metricValue(metric: Metric): number {
     switch (metric) {
       case 'kills':
         return this.counters.kills
-      case 'wolf':
-        return this.counters.wolf
-      case 'bear':
-        return this.counters.bear
       case 'elite':
         return this.counters.elite
       case 'gold':
@@ -1458,7 +1467,8 @@ export class Game {
       case 'quests':
         return this.counters.quests
       default:
-        return 0
+        // `slain:<kind>` — the only remaining shape of the union.
+        return this.counters.species[metric.slice(6) as EnemyKind] ?? 0
     }
   }
 

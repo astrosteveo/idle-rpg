@@ -20,7 +20,7 @@ import {
 } from '../game/content'
 import { itemScore, rarityName, statLines, uniqueDefOf } from '../game/loot'
 import type { Game } from '../game/state'
-import { SLOTS, SLOT_LABEL, type EnemyKind, type Item } from '../game/types'
+import { ENEMY_KINDS, SLOTS, SLOT_LABEL, type EnemyKind, type Item } from '../game/types'
 import type { QuestObjective } from '../game/content'
 import { CAMPS, MAP_TILES, REGIONS, WORLD_SIZE, groundLevelOf } from '../game/world'
 import { killsPerHour, type OfflineReport } from '../game/offline'
@@ -691,9 +691,9 @@ export class UI {
       ),
     )
 
-    for (const kind of ['wolf', 'bear'] as EnemyKind[]) {
+    for (const kind of ENEMY_KINDS) {
       const type = ENEMIES[kind]
-      const kills = g.counters[kind]
+      const kills = g.counters.species[kind]
       const tier = masteryTier(kills)
       const current = MASTERY_TIERS[tier]
       const next = MASTERY_TIERS[tier + 1]
@@ -1044,11 +1044,10 @@ function objectiveText(objective: QuestObjective, have: number, goal: number): s
   return `Reach ${camp?.name ?? 'the camp'}`
 }
 
-function labelFor(kind: string): string {
+function labelFor(kind: EnemyKind | 'elite' | 'any'): string {
   if (kind === 'any') return 'Beasts slain'
   if (kind === 'elite') return 'Elites slain'
-  if (kind === 'wolf') return 'Wolves slain'
-  return 'Bears slain'
+  return `${ENEMIES[kind].plural} slain`
 }
 
 function rewardText(reward: {

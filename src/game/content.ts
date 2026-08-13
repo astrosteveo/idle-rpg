@@ -3,7 +3,7 @@
  * the claimable milestone rewards. Systems read from this file so balance can
  * be changed without touching simulation code.
  */
-import type { EnemyKind, ItemStats, Slot } from './types'
+import { ENEMY_KINDS, perSpecies, type BySpecies, type EnemyKind, type ItemStats, type Slot } from './types'
 import type { IconKind } from '../render/sprites'
 
 /* ------------------------------------------------------------------ *
@@ -39,11 +39,13 @@ export interface Mods {
   executeMult: number
   /** Against a beast that has not been wounded yet. */
   openerMult: number
-  /** Damage dealt to each species, and damage taken from it. */
-  vsWolf: number
-  vsBear: number
-  fromWolf: number
-  fromBear: number
+  /**
+   * Damage dealt to each species, and damage taken from each species. Records
+   * rather than a field per animal: a new species is a row in `ENEMY_KINDS`,
+   * not four new modifier fields and four new stacking rules.
+   */
+  vs: BySpecies
+  from: BySpecies
   /**
    * Scales every distance in `Game.shouldGiveUp`. Only ever set below 1: the
    * de-aggro rule is what keeps the map traversable, so content may make a
@@ -68,9 +70,10 @@ export interface Mods {
 }
 
 /**
- * The identity element. Frozen because it is module scope: a `Mods` that
- * anything could write to would be one character's build leaking into
- * everyone's the moment the world is shared.
+ * The identity element. Frozen — including the two per-species records, which
+ * are the part a caller could plausibly reach into — because it is module
+ * scope: a `Mods` that anything could write to would be one character's build
+ * leaking into everyone's the moment the world is shared.
  */
 export const NO_MODS: Readonly<Mods> = Object.freeze({
   damageMult: 1,
@@ -88,10 +91,8 @@ export const NO_MODS: Readonly<Mods> = Object.freeze({
   swingArcMult: 1,
   executeMult: 1,
   openerMult: 1,
-  vsWolf: 1,
-  vsBear: 1,
-  fromWolf: 1,
-  fromBear: 1,
+  vs: Object.freeze(perSpecies(1)),
+  from: Object.freeze(perSpecies(1)),
   leashMult: 1,
   critAdd: 0,
   swingRangeAdd: 0,
@@ -103,7 +104,17 @@ export const NO_MODS: Readonly<Mods> = Object.freeze({
   ambush: false,
 })
 
-const COMBINE: Record<keyof Mods, 'mul' | 'add' | 'or'> = {
+/**
+ * A contribution. Identical to `Partial<Mods>` except that the two per-species
+ * records may be partial themselves — a relic that only has an opinion about
+ * wolves says so, rather than restating every other species at 1.
+ */
+export type ModsPatch = Partial<Omit<Mods, 'vs' | 'from'>> & {
+  vs?: Partial<BySpecies>
+  from?: Partial<BySpecies>
+}
+
+const COMBINE: Record<keyof Mods, 'mul' | 'add' | 'or' | 'mulEach'> = {
   damageMult: 'mul',
   attackSpeedMult: 'mul',
   maxHpMult: 'mul',
@@ -119,10 +130,8 @@ const COMBINE: Record<keyof Mods, 'mul' | 'add' | 'or'> = {
   swingArcMult: 'mul',
   executeMult: 'mul',
   openerMult: 'mul',
-  vsWolf: 'mul',
-  vsBear: 'mul',
-  fromWolf: 'mul',
-  fromBear: 'mul',
+  vs: 'mulEach',
+  from: 'mulEach',
   leashMult: 'mul',
   critAdd: 'add',
   swingRangeAdd: 'add',
@@ -134,22 +143,44 @@ const COMBINE: Record<keyof Mods, 'mul' | 'add' | 'or'> = {
   ambush: 'or',
 }
 
-/** Fresh, writable copy of the identity. */
+/**
+ * Fresh, writable copy of the identity. The species records are copied too —
+ * a shallow spread would hand every character the frozen module-scope one.
+ */
 export function baseMods(): Mods {
-  return { ...NO_MODS }
+  return { ...NO_MODS, vs: { ...NO_MODS.vs }, from: { ...NO_MODS.from } }
 }
 
 /** Folds one contribution into an accumulator, in place. */
-export function mergeMods(into: Mods, add: Partial<Mods>): Mods {
-  const acc = into as unknown as Record<string, number | boolean>
+export function mergeMods(into: Mods, add: ModsPatch): Mods {
+  const acc = into as unknown as Record<string, number | boolean | BySpecies>
   for (const [key, value] of Object.entries(add)) {
     if (value === undefined) continue
     const rule = COMBINE[key as keyof Mods]
-    if (rule === 'or') acc[key] = (acc[key] as boolean) || (value as boolean)
+    if (rule === 'mulEach') {
+      // Only the species the contribution mentions move; the rest stay at
+      // whatever the accumulator already says about them.
+      const target = acc[key] as BySpecies
+      for (const [kind, factor] of Object.entries(value as Partial<BySpecies>)) {
+        if (factor === undefined) continue
+        target[kind as EnemyKind] *= factor
+      }
+    } else if (rule === 'or') acc[key] = (acc[key] as boolean) || (value as boolean)
     else if (rule === 'mul') acc[key] = (acc[key] as number) * (value as number)
     else acc[key] = (acc[key] as number) + (value as number)
   }
   return into
+}
+
+/**
+ * "Ruinous against one animal, worse against everything else" — the shape a
+ * specialist relic wants, written once so a new species joins the losing side
+ * automatically instead of quietly becoming an exception.
+ */
+export function focused(kind: EnemyKind, against: number, others: number): BySpecies {
+  const out = perSpecies(others)
+  out[kind] = against
+  return out
 }
 
 /** A beast at or below this share of its health counts as executable. */
@@ -221,6 +252,8 @@ export function mitigate(damage: number, armor: number, attackerLevel: number): 
 export interface EnemyType {
   id: EnemyKind
   name: string
+  /** How the HUD counts them: "Wolves slain". */
+  plural: string
   eliteName: string
   sheet: 'wolf' | 'bear'
   eliteSheet: 'alphaWolf' | 'elderBear'
@@ -247,6 +280,7 @@ export const ENEMIES: Record<EnemyKind, EnemyType> = {
   wolf: {
     id: 'wolf',
     name: 'Grey Wolf',
+    plural: 'Wolves',
     eliteName: 'Alpha Wolf',
     sheet: 'wolf',
     eliteSheet: 'alphaWolf',
@@ -272,6 +306,7 @@ export const ENEMIES: Record<EnemyKind, EnemyType> = {
   bear: {
     id: 'bear',
     name: 'Brown Bear',
+    plural: 'Bears',
     eliteName: 'Elder Bear',
     sheet: 'bear',
     eliteSheet: 'elderBear',
@@ -370,6 +405,13 @@ export function xpScale(playerLevel: number, enemyLevel: number): number {
  * ------------------------------------------------------------------ */
 
 /**
+ * How much a swing overkills, per species. Declared as a `BySpecies` rather
+ * than cast to one: a species missing from here should fail the build, not
+ * quietly settle a night's hunting at `undefined` kills an hour.
+ */
+const CLEAVE: BySpecies = { wolf: 1.45, bear: 1.1 }
+
+/**
  * The ledger is a closed-form rate model, not a headless simulation — it has to
  * settle months of absence in a frame. It is deliberately an approximation, and
  * these are the knobs that make it honest.
@@ -382,7 +424,7 @@ export const OFFLINE = {
   /** Healing, deaths, pathing, waiting on respawns. */
   efficiency: 0.72,
   /** Arc melee cleaves, and wolves come in packs where bears do not. */
-  cleave: { wolf: 1.45, bear: 1.1 } as Record<EnemyKind, number>,
+  cleave: CLEAVE,
   /**
    * Rewards depend on level, so the run is stepped and stats recomputed between
    * buckets. Without this a level 1 character earns level 1 rates all night when
@@ -534,7 +576,18 @@ export const QUESTS: QuestDef[] = [
  * Milestones — claimed manually from the Rewards panel
  * ------------------------------------------------------------------ */
 
-export type Metric = 'kills' | 'wolf' | 'bear' | 'elite' | 'gold' | 'level' | 'quests'
+/**
+ * What a milestone counts. Per-species goals are one member generated from
+ * `EnemyKind` rather than one member written per animal, so a new species
+ * cannot be given a milestone the metric union has never heard of.
+ */
+export type Metric =
+  | 'kills'
+  | 'elite'
+  | 'gold'
+  | 'level'
+  | 'quests'
+  | `slain:${EnemyKind}`
 
 export interface MilestoneDef {
   id: string
@@ -582,7 +635,7 @@ export const MILESTONES: MilestoneDef[] = [
     id: 'm-wolf-40',
     name: 'Pack Breaker',
     desc: 'Slay 40 wolves',
-    metric: 'wolf',
+    metric: 'slain:wolf',
     threshold: 40,
     reward: { xp: 280, gold: 220, item: { base: 'sabatons', rarity: 2, ilvl: 9 } },
   },
@@ -590,7 +643,7 @@ export const MILESTONES: MilestoneDef[] = [
     id: 'm-bear-20',
     name: 'Ridge Walker',
     desc: 'Slay 20 bears',
-    metric: 'bear',
+    metric: 'slain:bear',
     threshold: 20,
     reward: { xp: 620, gold: 480, item: { base: 'helm', rarity: 3, ilvl: 13 } },
   },
@@ -659,7 +712,7 @@ export interface TalentDef {
   id: string
   name: string
   desc: string
-  mods: Partial<Mods>
+  mods: ModsPatch
 }
 
 export interface TalentRow {
@@ -847,7 +900,7 @@ export interface UniqueDef {
   /** The rule, in the words the tooltip uses. */
   rule: string
   flavour: string
-  mods: Partial<Mods>
+  mods: ModsPatch
   /** Which species' elites carry it. `null` means any elite may. */
   from: EnemyKind | null
 }
@@ -903,7 +956,7 @@ export const UNIQUES: UniqueDef[] = [
     icon: 'ring',
     rule: '+90% damage to wolves. −35% damage to everything else.',
     flavour: 'Cut for one hunt, and no other.',
-    mods: { vsWolf: 1.9, vsBear: 0.65 },
+    mods: { vs: focused('wolf', 1.9, 0.65) },
     from: 'wolf',
   },
   {
@@ -944,9 +997,9 @@ export const UNIQUE_DROP_CHANCE = 0.08
  * ------------------------------------------------------------------ */
 
 /**
- * Read straight off `Counters.wolf` / `Counters.bear`, which the game has been
- * keeping since the first commit. Nothing new is stored: mastery is a view of
- * kills, so it survives any save and can never disagree with the bestiary.
+ * Read straight off `Counters.species`, which the game has been keeping since
+ * the first commit. Nothing new is stored: mastery is a view of kills, so it
+ * survives any save and can never disagree with the bestiary.
  */
 export const MASTERY_TIERS = [
   { at: 25, name: 'Tracker', damage: 1.06, resist: 1 },
@@ -964,15 +1017,16 @@ export function masteryTier(kills: number): number {
   return tier
 }
 
-export function masteryMods(kills: Record<EnemyKind, number>): Partial<Mods> {
-  const wolf = MASTERY_TIERS[masteryTier(kills.wolf)]
-  const bear = MASTERY_TIERS[masteryTier(kills.bear)]
-  return {
-    vsWolf: wolf?.damage ?? 1,
-    fromWolf: wolf?.resist ?? 1,
-    vsBear: bear?.damage ?? 1,
-    fromBear: bear?.resist ?? 1,
+export function masteryMods(kills: BySpecies): ModsPatch {
+  const vs: Partial<BySpecies> = {}
+  const from: Partial<BySpecies> = {}
+  for (const kind of ENEMY_KINDS) {
+    const tier = MASTERY_TIERS[masteryTier(kills[kind])]
+    if (!tier) continue
+    vs[kind] = tier.damage
+    from[kind] = tier.resist
   }
+  return { vs, from }
 }
 
 /* ------------------------------------------------------------------ *
@@ -988,7 +1042,7 @@ export function masteryMods(kills: Record<EnemyKind, number>): Partial<Mods> {
 export function buildMods(
   wornUniques: readonly (string | undefined)[],
   talents: readonly string[],
-  kills: Record<EnemyKind, number>,
+  kills: BySpecies,
 ): Mods {
   const m = baseMods()
   for (const id of wornUniques) {
@@ -1005,5 +1059,10 @@ export function buildMods(
 
 /** Damage multiplier against one species, from mastery and any worn relic. */
 export function damageVs(mods: Readonly<Mods>, kind: EnemyKind): number {
-  return kind === 'wolf' ? mods.vsWolf : mods.vsBear
+  return mods.vs[kind]
+}
+
+/** Damage multiplier taken from one species — mastery's other half. */
+export function resistFrom(mods: Readonly<Mods>, kind: EnemyKind): number {
+  return mods.from[kind]
 }

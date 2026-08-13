@@ -27,7 +27,7 @@ import { itemScore, makeItem, makeUnique, rollRarity, sumStats } from './loot'
 import type { DerivedStats } from './content'
 import type { Rng } from '../core/math'
 import type { Save } from './save'
-import type { EnemyKind, Item, Slot } from './types'
+import type { BySpecies, EnemyKind, Item, Slot } from './types'
 import { SLOTS } from './types'
 import { REGIONS, groundLevelOf, type BiomeId } from './world'
 
@@ -106,10 +106,7 @@ export function runOfflineLedger(save: Save, nowMs: number, rand: Rng): OfflineR
   // Mastery is a function of kills, and kills are what this loop produces — so
   // the tally advances with the run and the build tightens as the night goes on,
   // exactly as it would at the keyboard.
-  const killsByKind: Record<EnemyKind, number> = {
-    wolf: save.counters.wolf,
-    bear: save.counters.bear,
-  }
+  const killsByKind: BySpecies = { ...save.counters.species }
 
   let killsFloat = 0
   let gold = 0

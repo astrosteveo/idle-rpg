@@ -12,10 +12,10 @@
  * state a server will eventually own.
  */
 import type { Counters } from './state'
-import type { Item, Slot } from './types'
+import { ENEMY_KINDS, perSpecies, type Item, type Slot } from './types'
 import type { BiomeId } from './world'
 
-export const SAVE_VERSION = 2
+export const SAVE_VERSION = 3
 export const SAVE_KEY = 'wildmarch.save'
 
 export interface SavedPlayer {
@@ -32,7 +32,7 @@ export interface SavedPlayer {
   auto: boolean
 }
 
-export interface SaveV2 {
+export interface SaveV3 {
   v: number
   /** Saves are tied to the world they were made in. */
   seed: number
@@ -63,7 +63,7 @@ export interface SaveV2 {
 }
 
 /** The schema at the current version. Everything outside this file uses it. */
-export type Save = SaveV2
+export type Save = SaveV3
 
 /**
  * Structural check plus a forward migration, in one pass, because callers only
@@ -90,7 +90,37 @@ export function readSave(x: unknown, expectSeed: number): Save | null {
   const talents = Array.isArray(s.talents) ? s.talents.filter(isId) : []
   const foundUniques = Array.isArray(s.foundUniques) ? s.foundUniques.filter(isId) : []
 
-  return { ...(s as Save), v: SAVE_VERSION, talents, foundUniques }
+  return {
+    ...(s as Save),
+    v: SAVE_VERSION,
+    talents,
+    foundUniques,
+    counters: readCounters(s.counters),
+  }
+}
+
+/**
+ * v2 → v3: per-species kills moved from a field per animal (`wolf`, `bear`) to
+ * one record keyed by species. The old fields were already named for their
+ * species, so the migration is a lookup rather than a translation table — and a
+ * species added since the save was written simply starts at zero.
+ */
+function readCounters(x: unknown): Counters {
+  const c = (x ?? {}) as Record<string, unknown>
+  const legacy = (c.species ?? c) as Record<string, unknown>
+  const species = perSpecies(0)
+  for (const kind of ENEMY_KINDS) species[kind] = count(legacy[kind])
+  return {
+    kills: count(c.kills),
+    elite: count(c.elite),
+    gold: count(c.gold),
+    quests: count(c.quests),
+    species,
+  }
+}
+
+function count(x: unknown): number {
+  return typeof x === 'number' && Number.isFinite(x) ? x : 0
 }
 
 function isId(x: unknown): x is string {
