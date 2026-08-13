@@ -6,10 +6,21 @@
  * panels only rebuild when the game marks itself dirty or a panel is opened.
  */
 import { clamp } from '../core/math'
-import { ENEMIES, MILESTONES, QUESTS, RARITY_COLORS } from '../game/content'
-import { itemScore, rarityName, statLines } from '../game/loot'
+import {
+  ENEMIES,
+  MASTERY_TIERS,
+  MILESTONES,
+  QUESTS,
+  RARITY_COLORS,
+  TALENT_ROWS,
+  UNIQUES,
+  damageVs,
+  masteryTier,
+  type UniqueDef,
+} from '../game/content'
+import { itemScore, rarityName, statLines, uniqueDefOf } from '../game/loot'
 import type { Game } from '../game/state'
-import { SLOTS, SLOT_LABEL, type Item } from '../game/types'
+import { SLOTS, SLOT_LABEL, type EnemyKind, type Item } from '../game/types'
 import type { QuestObjective } from '../game/content'
 import { CAMPS, MAP_TILES, REGIONS, WORLD_SIZE, groundLevelOf } from '../game/world'
 import { killsPerHour, type OfflineReport } from '../game/offline'
@@ -17,9 +28,9 @@ import { OFFLINE } from '../game/content'
 import type { Renderer } from '../render/renderer'
 import { abilityIcon, itemIcon } from '../render/sprites'
 
-type Tab = 'bag' | 'quests' | 'rewards' | 'hunt'
+type Tab = 'bag' | 'quests' | 'rewards' | 'hunt' | 'talents' | 'beasts'
 
-const TABS: Tab[] = ['bag', 'quests', 'rewards', 'hunt']
+const TABS: Tab[] = ['bag', 'quests', 'rewards', 'hunt', 'talents', 'beasts']
 
 /** "4h 12m", "18m" — the report and the Hunt tab both read better than seconds. */
 function duration(seconds: number): string {
@@ -199,6 +210,8 @@ export class UI {
     mk('Bag', 'I', 'bag', 'bag')
     mk('Tasks', 'J', 'quests')
     mk('Rewards', 'R', 'rewards', 'rewards')
+    mk('Talents', 'T', 'talents', 'talents')
+    mk('Beasts', 'B', 'beasts')
     mk('Hunt', 'H', 'hunt')
 
     wrap.append(abilities, menu)
@@ -240,6 +253,8 @@ export class UI {
     mkTab('bag', 'Inventory')
     mkTab('quests', 'Tasks')
     mkTab('rewards', 'Rewards')
+    mkTab('talents', 'Talents')
+    mkTab('beasts', 'Bestiary')
     mkTab('hunt', 'Hunt')
     const close = el('button', 'btn p-close')
     close.textContent = 'Close'
@@ -305,7 +320,7 @@ export class UI {
 
     const rows: string[] = [`<div><span>Beasts slain</span><b>${r.kills.toLocaleString()}</b></div>`]
     if (r.eliteKills > 0) {
-      rows.push(`<div><span>${type.eliteName}s</span><b>${r.eliteKills}</b></div>`)
+      rows.push(`<div><span>${type.eliteName} slain</span><b>${r.eliteKills}</b></div>`)
     }
     rows.push(`<div><span>Experience</span><b>${r.xp.toLocaleString()}</b></div>`)
     if (levels > 0) {
@@ -321,12 +336,16 @@ export class UI {
       const loot = el('div', 'r-loot')
       loot.appendChild(el('div', 'col-h', 'Brought home'))
       for (const it of r.items) {
+        const relic = uniqueDefOf(it)
         loot.appendChild(
           el(
             'div',
-            'r-item',
-            `<b style="color:${RARITY_COLORS[it.rarity]}">${it.name}</b>
-             <span>ilvl ${it.ilvl}</span>`,
+            `r-item${relic ? ' relic' : ''}`,
+            relic
+              ? `<b style="color:${RARITY_COLORS[4]}">${relic.name}</b>
+                 <span>a relic — ${relic.rule}</span>`
+              : `<b style="color:${RARITY_COLORS[it.rarity]}">${it.name}</b>
+                 <span>ilvl ${it.ilvl}</span>`,
           ),
         )
       }
@@ -351,6 +370,8 @@ export class UI {
     else if (k === 'j') this.toggle('quests')
     else if (k === 'r') this.toggle('rewards')
     else if (k === 'h') this.toggle('hunt')
+    else if (k === 't') this.toggle('talents')
+    else if (k === 'b') this.toggle('beasts')
     else if (k === 'escape') this.hide()
     else if (k === 'q') this.game.useAbility('whirlwind')
     else if (k === 'e') this.game.useAbility('secondwind')
@@ -453,6 +474,16 @@ export class UI {
     const claim = g.claimableCount
     this.setBadge('rewards', claim)
     this.setBadge('bag', this.upgradesInBag())
+    this.setBadge('talents', g.talentPoints)
+
+    // Ability text is derived from the build, so a talent that changes a
+    // cooldown or a heal has to change the button's tooltip with it.
+    for (let i = 0; i < this.abilityEls.length; i++) {
+      const ab = g.abilities[i]!
+      const node = this.abilityEls[i]!
+      const title = `${ab.name} — ${ab.desc}`
+      if (node.root.title !== title) node.root.title = title
+    }
 
     this.drawMinimap()
     this.updateTracker()
@@ -472,11 +503,21 @@ export class UI {
     b.classList.toggle('hide', n <= 0)
   }
 
+  /**
+   * A relic outscores nothing and is outscored by almost everything, so it is
+   * never an upgrade and never has one — badging either way would nag the
+   * player to undo the one decision they made deliberately.
+   */
+  private isUpgrade(it: Item | null): boolean {
+    if (!it || it.unique) return false
+    const current = this.game.equipped[it.slot]
+    if (current?.unique) return false
+    return itemScore(it) > itemScore(current)
+  }
+
   private upgradesInBag(): number {
     let n = 0
-    for (const it of this.game.bag) {
-      if (it && itemScore(it) > itemScore(this.game.equipped[it.slot])) n++
-    }
+    for (const it of this.game.bag) if (this.isUpgrade(it)) n++
     return n
   }
 
@@ -552,7 +593,179 @@ export class UI {
     if (this.tab === 'bag') this.renderBag(body)
     else if (this.tab === 'quests') this.renderQuests(body)
     else if (this.tab === 'hunt') this.renderHunt(body)
+    else if (this.tab === 'talents') this.renderTalents(body)
+    else if (this.tab === 'beasts') this.renderBestiary(body)
     else this.renderRewards(body)
+  }
+
+  /**
+   * Five rows, one pick each, and a pick is final until it is bought back.
+   * Everything on this screen is a choice the simulation refuses to make for
+   * the player — the counterweight to auto-equip deciding all the gear.
+   */
+  private renderTalents(body: HTMLElement) {
+    const g = this.game
+    const wrap = el('div', 'tal-wrap')
+
+    const points = g.talentPoints
+    const intro = el('div', 'hunt-intro')
+    intro.innerHTML = points
+      ? `<b>${points} ${points === 1 ? 'choice' : 'choices'} waiting.</b> One talent per
+         row, and a taken row stays taken until you retrain.`
+      : `One talent per row, unlocked by level. A taken row stays taken until you
+         retrain.`
+    wrap.appendChild(intro)
+
+    for (const row of TALENT_ROWS) {
+      const unlocked = g.player.level >= row.level
+      const taken = g.talentIn(row)
+      const card = el('div', 'tal-row')
+      card.classList.toggle('locked', !unlocked)
+      card.classList.toggle('open', unlocked && !taken)
+
+      const head = el('div', 'g-head')
+      head.innerHTML = `<b>${row.name}</b>
+        <span>${unlocked ? (taken ? 'Chosen' : 'Choose one') : `Level ${row.level}`}</span>`
+      card.appendChild(head)
+
+      const grid = el('div', 'tal-grid')
+      for (const choice of row.choices) {
+        const node = el('button', 'tal-node')
+        node.innerHTML = `<b>${choice.name}</b><span>${choice.desc}</span>`
+        node.classList.toggle('sel', taken === choice.id)
+        // A locked row and an already-decided row are both unclickable, but
+        // they read differently: one is "not yet", the other is "not this one".
+        node.classList.toggle('passed', !!taken && taken !== choice.id)
+        node.disabled = !unlocked || !!taken
+        node.addEventListener('click', () => {
+          if (g.chooseTalent(choice.id)) this.renderPanel()
+        })
+        grid.appendChild(node)
+      }
+      card.appendChild(grid)
+      wrap.appendChild(card)
+    }
+
+    const cost = g.respecCost
+    const foot = el('div', 'tal-foot')
+    if (cost > 0) {
+      const btn = el('button', 'btn')
+      btn.textContent = `Retrain — ${cost.toLocaleString()}g`
+      btn.disabled = g.player.gold < cost
+      btn.addEventListener('click', () => {
+        g.respec()
+        this.renderPanel()
+      })
+      foot.appendChild(btn)
+      foot.appendChild(
+        el(
+          'div',
+          'hunt-intro',
+          `Clears every pick and hands the choices back. The gold is spent, not
+           refunded — it is the only real drain on the purse in the game.`,
+        ),
+      )
+    } else {
+      foot.appendChild(el('div', 'hunt-intro', 'Nothing to retrain yet.'))
+    }
+    wrap.appendChild(foot)
+
+    body.appendChild(wrap)
+  }
+
+  /**
+   * The bestiary is a view of `counters`, not a new record — which is why it
+   * can never disagree with the kill totals the rest of the HUD shows.
+   */
+  private renderBestiary(body: HTMLElement) {
+    const g = this.game
+    const wrap = el('div', 'hunt-wrap')
+
+    wrap.appendChild(
+      el(
+        'div',
+        'hunt-intro',
+        `Every beast you kill is remembered. Mastery sharpens what you do to a
+         species and blunts what it does back — and their elites carry the
+         relics.`,
+      ),
+    )
+
+    for (const kind of ['wolf', 'bear'] as EnemyKind[]) {
+      const type = ENEMIES[kind]
+      const kills = g.counters[kind]
+      const tier = masteryTier(kills)
+      const current = MASTERY_TIERS[tier]
+      const next = MASTERY_TIERS[tier + 1]
+      const card = el('div', 'beast')
+
+      const head = el('div', 'g-head')
+      head.innerHTML = `<b>${type.name}</b><span>${kills.toLocaleString()} slain</span>`
+      card.append(head, el('div', 'b-lore', type.lore), el('div', 'g-desc', type.habits))
+
+      const where = REGIONS.filter((r) => r.kind === kind)
+        .map((r) => `<b style="color:${r.color}">${r.name}</b> ${r.levelMin}–${r.levelMax}`)
+        .join(' · ')
+      card.appendChild(
+        el('div', 'b-where', `Ranges: ${where}. Elites are known as the ${type.eliteName}.`),
+      )
+
+      const mastery = el('div', 'b-mastery')
+      const rank = current ? current.name : 'Unblooded'
+      const bonus = current
+        ? `+${Math.round((current.damage - 1) * 100)}% damage dealt` +
+          (current.resist < 1 ? `, ${Math.round((1 - current.resist) * 100)}% less taken` : '')
+        : 'No bonus yet'
+      const toGo = next ? next.at - kills : 0
+      mastery.innerHTML = `<div class="b-rank"><b>${rank}</b><span>${bonus}</span></div>
+        <div class="q-bar"><i style="width:${
+          next ? clamp(kills / next.at, 0, 1) * 100 : 100
+        }%"></i></div>
+        <div class="b-next">${
+          next
+            ? `${toGo.toLocaleString()} more to ${next.name}`
+            : 'Mastered — nothing left to learn about them'
+        }</div>`
+      card.appendChild(mastery)
+
+      card.appendChild(this.relicList(UNIQUES.filter((u) => u.from === kind)))
+      wrap.appendChild(card)
+    }
+
+    const wandering = UNIQUES.filter((u) => u.from === null)
+    if (wandering.length) {
+      const card = el('div', 'beast')
+      card.appendChild(
+        el('div', 'g-head', `<b>Unclaimed</b><span>any elite</span>`),
+      )
+      card.appendChild(
+        el('div', 'g-desc', 'Relics with no owner. Any elite in the march may be carrying one.'),
+      )
+      card.appendChild(this.relicList(wandering))
+      wrap.appendChild(card)
+    }
+
+    body.appendChild(wrap)
+  }
+
+  private relicList(defs: UniqueDef[]): HTMLElement {
+    const g = this.game
+    const box = el('div', 'b-relics')
+    box.appendChild(el('div', 'col-h', 'Relics'))
+    for (const def of defs) {
+      const found = g.foundUniques.has(def.id)
+      const row = el('div', 'relic')
+      row.classList.toggle('unfound', !found)
+      // An unfound relic still advertises its slot: knowing something exists
+      // for your hands is the hook, knowing its name would spend it.
+      row.innerHTML = found
+        ? `<b style="color:${RARITY_COLORS[4]}">${def.name}</b>
+           <span>${def.rule}</span>
+           <em>${def.flavour}</em>`
+        : `<b>? ? ?</b><span>An undiscovered ${SLOT_LABEL[def.slot].toLowerCase()} relic.</span>`
+      box.appendChild(row)
+    }
+    return box
   }
 
   private renderHunt(body: HTMLElement) {
@@ -575,7 +788,11 @@ export class UI {
       card.classList.toggle('locked', !eligible)
       card.classList.toggle('outgrown', outgrown)
 
-      const rate = eligible ? killsPerHour(g.stats, r.kind, groundLevelOf(r)) : 0
+      // Same call the ledger makes, mastery and relics included, so the rate
+      // shown before choosing a ground is the rate that ground will pay.
+      const rate = eligible
+        ? killsPerHour(g.stats, r.kind, groundLevelOf(r), damageVs(g.mods, r.kind))
+        : 0
       const beast = r.kind === 'wolf' ? 'Wolves' : 'Bears'
       const elites = r.eliteNodes > 0 ? ' and their elites' : ''
 
@@ -677,7 +894,8 @@ export class UI {
           this.hideTip()
           this.needsPanel = true
         })
-        if (itemScore(item) > itemScore(g.equipped[item.slot])) node.classList.add('up')
+        if (this.isUpgrade(item)) node.classList.add('up')
+        if (item.unique) node.classList.add('relic')
       }
       bagGrid.appendChild(node)
     })
@@ -767,23 +985,38 @@ export class UI {
 
   private showTip(item: Item, e: PointerEvent) {
     const equipped = this.game.equipped[item.slot]
+    const relic = uniqueDefOf(item)
     const color = RARITY_COLORS[item.rarity]
     const lines = statLines(item)
       .map((l) => `<div class="t-stat">${l}</div>`)
       .join('')
+
+    // A relic is compared to nothing. Its worth is a rule, and the score that
+    // drives every other comparison in this tooltip cannot see it.
     let cmp = ''
-    if (equipped && equipped.uid !== item.uid) {
+    if (relic) {
+      cmp = `<div class="t-rule">${relic.rule}</div>
+        <div class="t-flavour">${relic.flavour}</div>`
+    } else if (equipped && equipped.uid !== item.uid && !equipped.unique) {
       const delta = itemScore(item) - itemScore(equipped)
       const cls = delta > 0 ? 'up' : delta < 0 ? 'down' : ''
       cmp = `<div class="t-cmp">Equipped: ${equipped.name}<br>
         <span class="${cls}">${delta > 0 ? '▲ upgrade' : delta < 0 ? '▼ downgrade' : '≈ sidegrade'}</span></div>`
+    } else if (equipped && equipped.uid !== item.uid && equipped.unique) {
+      cmp = `<div class="t-cmp">Equipped: ${equipped.name}<br>
+        <span>a relic — swapping it is your call, not auto-equip's</span></div>`
     }
+
     this.tip.innerHTML = `
       <div class="t-name" style="color:${color}">${item.name}</div>
-      <div class="t-sub">${rarityName(item.rarity)} ${SLOT_LABEL[item.slot]} · ilvl ${item.ilvl}</div>
+      <div class="t-sub">${
+        relic ? 'Relic' : rarityName(item.rarity)
+      } ${SLOT_LABEL[item.slot]} · ilvl ${item.ilvl}</div>
       ${lines}
       ${cmp}
-      <div class="t-hint">Sells for ${item.value}g</div>`
+      <div class="t-hint">${
+        relic ? 'Never sold, never auto-equipped, never dropped twice.' : `Sells for ${item.value}g`
+      }</div>`
     this.tip.classList.add('show')
     this.moveTip(e)
   }

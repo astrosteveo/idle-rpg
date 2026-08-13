@@ -8,7 +8,7 @@ import { clamp, hash2 } from '../core/math'
 import { CAMPS, TILE, WORLD_SIZE, type PropInstance } from '../game/world'
 import type { Game } from '../game/state'
 import type { Enemy } from '../game/types'
-import { ENEMIES, SWING_HALF_ANGLE, SWING_RANGE } from '../game/content'
+import { ENEMIES } from '../game/content'
 import { CHUNK_PX, CHUNK_TILES, Terrain } from './terrain'
 import { drawTextCentered } from './font'
 import type { Art } from './sprites'
@@ -116,6 +116,7 @@ export class Renderer {
 
     this.drawTerrain(ctx, ox, oy)
     this.drawCampAuras(ctx, ox, oy)
+    this.drawGrounds(ctx, ox, oy, time)
     this.drawCorpses(ctx, ox, oy)
     this.drawScene(ctx, ox, oy, time)
     this.drawEffects(ctx, ox, oy)
@@ -178,6 +179,58 @@ export class Renderer {
           2,
           2,
         )
+      }
+    }
+  }
+
+  /**
+   * Burning ground, drawn on the ground layer so beasts and props stand *in*
+   * it. Embers are placed from a hash of their index rather than a random
+   * number, so a patch keeps the same scatter for its whole life instead of
+   * boiling from frame to frame.
+   */
+  private drawGrounds(
+    ctx: CanvasRenderingContext2D,
+    ox: number,
+    oy: number,
+    time: number,
+  ) {
+    for (const g of this.game.grounds) {
+      const life = clamp(1 - g.t / g.life, 0, 1)
+      const sx = g.x - ox
+      const sy = g.y - oy
+      if (sx < -g.radius || sy < -g.radius) continue
+      if (sx > this.vw + g.radius || sy > this.vh + g.radius) continue
+
+      // The wash stays faint — a solid disc reads as scorched dirt, and what
+      // makes it read as fire is the flames standing up out of it.
+      const flicker = 1 + Math.sin(time * 11 + g.x) * 0.04
+      ctx.fillStyle = `rgba(150,44,12,${0.17 * life})`
+      pixelDisc(ctx, sx, sy, g.radius * flicker, g.radius * 0.6 * flicker)
+      ctx.fillStyle = `rgba(240,110,30,${0.13 * life})`
+      pixelDisc(ctx, sx, sy, g.radius * 0.6 * flicker, g.radius * 0.36 * flicker)
+
+      const n = 46
+      for (let i = 0; i < n; i++) {
+        const a = hash2(i, g.x) * Math.PI * 2
+        // sqrt keeps the scatter even across the area instead of crowding
+        // the middle, which is where a uniform radius would pile them.
+        const r = Math.sqrt(hash2(g.y, i)) * g.radius
+        const px = Math.round(sx + Math.cos(a) * r)
+        const py = Math.round(sy + Math.sin(a) * r * 0.6)
+        // Each flame keeps its own phase, so the patch crackles rather than
+        // pulsing in unison.
+        const beat = (time * 2.2 + hash2(i, i * 3 + 1)) % 1
+        if (beat > life) continue
+        const h = 1 + Math.round((1 - Math.abs(beat * 2 - 1)) * 4)
+        ctx.fillStyle = '#c9481a'
+        ctx.fillRect(px, py - h, 2, h)
+        ctx.fillStyle = beat < 0.45 ? '#ffd27a' : '#ff8a3c'
+        ctx.fillRect(px, py - h, 2, Math.max(1, h - 2))
+        if (h > 3) {
+          ctx.fillStyle = '#fff2cd'
+          ctx.fillRect(px, py - h, 2, 1)
+        }
       }
     }
   }
@@ -332,8 +385,9 @@ export class Renderer {
       const sy = fx.y - oy
       switch (fx.kind) {
         case 'slash': {
-          // A crescent sweeping through the swing arc.
-          const spread = SWING_HALF_ANGLE * 1.05
+          // A crescent sweeping through the swing arc — which the build can
+          // widen, so it is read from the game rather than the constant.
+          const spread = this.game.swingArc * 1.05
           const from = fx.angle - spread
           const sweep = spread * 2
           ctx.fillStyle = t < 0.5 ? '#ffffff' : '#cfd8ea'
@@ -410,12 +464,14 @@ export class Renderer {
     // Reach indicator while auto-battling, so the swing arc is legible.
     const p = this.game.player
     if (p.auto && p.alive) {
+      const arc = this.game.swingArc
+      const reach = this.game.swingRange
       ctx.fillStyle = 'rgba(230,240,255,0.13)'
       for (let i = 0; i < 40; i++) {
-        const a = p.facing - SWING_HALF_ANGLE + (i / 39) * SWING_HALF_ANGLE * 2
+        const a = p.facing - arc + (i / 39) * arc * 2
         ctx.fillRect(
-          Math.round(p.x - ox + Math.cos(a) * SWING_RANGE),
-          Math.round(p.y - oy + Math.sin(a) * SWING_RANGE * 0.62),
+          Math.round(p.x - ox + Math.cos(a) * reach),
+          Math.round(p.y - oy + Math.sin(a) * reach * 0.62),
           2,
           2,
         )

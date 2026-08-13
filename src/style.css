@@ -348,6 +348,7 @@ body {
 #menubar {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
 }
 .menu-btn {
   position: relative;
@@ -536,12 +537,22 @@ body {
   display: flex;
 }
 
+/* Six tabs and a Close button do not fit a phone. The strip scrolls sideways
+   rather than wrapping, so the panel body keeps its height. */
 .p-head {
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 8px 8px 0;
   border-bottom: 1px solid var(--panel-edge);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.p-head::-webkit-scrollbar {
+  display: none;
+}
+.tab {
+  flex: 0 0 auto;
 }
 .tab {
   background: none;
@@ -1057,4 +1068,212 @@ body {
 }
 .outgrown-note {
   color: var(--rage);
+}
+
+/* ============================================================
+   Talents — one pick per row, and the pick is the point.
+   ============================================================ */
+
+.tal-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tal-row {
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tal-row.locked {
+  opacity: 0.45;
+}
+.tal-row.open {
+  border-color: var(--gold);
+  background: rgba(242, 193, 78, 0.05);
+}
+.tal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+.tal-node {
+  text-align: left;
+  border: 1px solid #2a3140;
+  border-radius: 3px;
+  background: #12161f;
+  color: var(--text);
+  font: inherit;
+  padding: 8px 10px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.tal-node:hover:not(:disabled) {
+  border-color: var(--gold);
+  background: #171d28;
+}
+.tal-node b {
+  font-size: 12px;
+  font-weight: 500;
+}
+.tal-node span {
+  font-size: 10px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.tal-node.sel {
+  border-color: var(--gold);
+  background: rgba(242, 193, 78, 0.1);
+}
+.tal-node.sel b {
+  color: var(--gold);
+}
+/* Not "disabled" but "not chosen" — the row is decided, so these read as the
+   roads not taken rather than as anything broken. */
+.tal-node.passed {
+  opacity: 0.4;
+}
+.tal-node:disabled {
+  cursor: default;
+}
+.tal-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+.tal-foot .btn {
+  align-self: flex-start;
+}
+.tal-foot .btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ============================================================
+   Bestiary — a view of the kill counters, plus the relic list.
+   ============================================================ */
+
+.beast {
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.b-lore {
+  font-size: 11px;
+  color: var(--text);
+  line-height: 1.6;
+}
+.b-where {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.b-mastery {
+  margin-top: 2px;
+  padding: 8px 10px;
+  background: #12161f;
+  border: 1px solid #2a3140;
+  border-radius: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.b-rank {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.b-rank b {
+  font-size: 12px;
+  color: var(--gold);
+  font-weight: 500;
+}
+.b-rank span {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.b-next {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.b-relics {
+  margin-top: 4px;
+}
+.relic {
+  border-left: 2px solid var(--r4);
+  padding: 3px 0 3px 9px;
+  margin-bottom: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.relic b {
+  font-size: 11px;
+  font-weight: 500;
+}
+.relic span {
+  font-size: 10px;
+  color: #b8c4d8;
+  line-height: 1.5;
+}
+.relic em {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+/* An undiscovered relic is a silhouette: it advertises a slot and nothing more. */
+.relic.unfound {
+  border-left-color: #3a4152;
+  opacity: 0.6;
+}
+.relic.unfound b {
+  color: var(--text-dim);
+  letter-spacing: 0.2em;
+}
+
+/* A relic in the bag gets its own mark — it is never an upgrade or a
+   downgrade, so the ▲ never applies to it. */
+.slot.relic::after {
+  content: "◆";
+  position: absolute;
+  top: -3px;
+  left: 2px;
+  font-size: 9px;
+  color: var(--r4);
+  text-shadow: 0 0 3px #000;
+}
+
+#tip .t-rule {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid #2a3140;
+  color: #ffbe6a;
+  line-height: 1.5;
+}
+#tip .t-flavour {
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-style: italic;
+  line-height: 1.5;
+}
+.r-item.relic {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  border-left: 2px solid var(--r4);
+  padding-left: 9px;
+}
+.r-item.relic span {
+  color: #ffbe6a;
 }
