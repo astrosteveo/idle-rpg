@@ -117,35 +117,58 @@ function warriorTorso(c: PixelCanvas, cx: number, bob: number, halfW: number) {
   c.px(cx - 2, top + h - 4, 4, 3, W.gold)
 }
 
-function warriorHead(c: PixelCanvas, cx: number, bob: number, dir: 0 | 1 | 2 | 3) {
+/**
+ * Head views. 0 = head-on, 2 = profile (facing right), 3 = back of the helm,
+ * 4 = three-quarter front turned right, 5 = three-quarter back turned right.
+ * The two three-quarter poses are what sell a 45-degree heading: the face is
+ * still visible but its features are crowded toward the leading edge.
+ */
+function warriorHead(c: PixelCanvas, cx: number, bob: number, dir: 0 | 1 | 2 | 3 | 4 | 5) {
   const top = 5 + bob
-  // Helm dome
-  c.blob(cx - 5, top, 10, 7, W.steel)
-  c.px(cx - 5, top + 1, 2, 5, W.steelL)
-  c.px(cx + 3, top + 1, 2, 5, W.steelD)
-  c.px(cx - 6, top + 5, 12, 2, W.steelD)
-  if (dir === 3) {
+  // Helm dome. On a turned head the lit side slides toward the leading edge.
+  const lean = dir === 4 || dir === 5 ? 1 : 0
+  c.blob(cx - 5 + lean, top, 10, 7, W.steel)
+  c.px(cx - 5 + lean, top + 1, 2, 5, W.steelL)
+  c.px(cx + 3 + lean, top + 1, 2, 5, W.steelD)
+  c.px(cx - 6 + lean, top + 5, 12, 2, W.steelD)
+  if (dir === 3 || dir === 5) {
     // Back of the head: helm skirt and a tuft of hair.
-    c.px(cx - 5, top + 7, 10, 5, W.steelD)
-    c.px(cx - 3, top + 10, 6, 3, W.hair)
-    c.px(cx - 1, top - 3, 2, 4, W.cloth)
+    c.px(cx - 5 + lean, top + 7, 10, 5, W.steelD)
+    c.px(cx - 3 + lean, top + 10, 6, 3, W.hair)
+    if (dir === 5) {
+      // Turned away but not straight away — a sliver of jaw and cheek guard
+      // wraps around the leading side of the helm.
+      c.px(cx + 3, top + 7, 3, 4, W.skinD)
+      c.px(cx + 2, top + 6, 2, 5, W.steelD)
+    }
+    c.px(cx - 1 + lean, top - 3, 2, 4, W.cloth)
     return
   }
   // Face
-  c.blob(cx - 4, top + 6, 8, 6, W.skin)
-  c.px(cx - 4, top + 9, 8, 3, W.skinD)
+  c.blob(cx - 4 + lean, top + 6, 8, 6, W.skin)
+  c.px(cx - 4 + lean, top + 9, 8, 3, W.skinD)
   if (dir === 0) {
     c.px(cx - 1, top + 5, 2, 7, W.steel) // nasal guard
     c.dot(cx - 3, top + 8, '#20242e')
     c.dot(cx + 2, top + 8, '#20242e')
     c.px(cx - 3, top + 11, 6, 1, W.hair)
+  } else if (dir === 4) {
+    // Three-quarter. The give-away is asymmetry: the far cheek is swallowed by
+    // the helm, the far eye is foreshortened to a single pixel tight against
+    // the nasal guard, and the near eye stays full width out on the cheek.
+    c.px(cx - 4, top + 6, 3, 6, W.steelD)
+    c.px(cx, top + 5, 2, 7, W.steel) // nasal guard, pushed to the lead
+    c.dot(cx - 1, top + 8, '#20242e')
+    c.px(cx + 3, top + 8, 2, 1, '#20242e')
+    c.px(cx + 4, top + 9, 2, 2, W.skinD) // jaw corner catching the light
+    c.px(cx, top + 11, 4, 1, W.hair)
   } else {
     // Side profile: one eye, jaw shaded toward the back of the head.
     c.px(cx - 5, top + 6, 4, 6, W.steelD)
     c.dot(cx + 2, top + 8, '#20242e')
     c.px(cx + 4, top + 9, 2, 2, W.skinD)
   }
-  c.px(cx - 1, top - 3, 2, 4, W.cloth) // plume
+  c.px(cx - 1 + lean, top - 3, 2, 4, W.cloth) // plume
 }
 
 function drawWarriorFront(c: PixelCanvas, col: number, back: boolean) {
@@ -205,18 +228,114 @@ function drawWarriorSide(c: PixelCanvas, col: number) {
   warriorHead(c, cx, p.bob, 2)
 }
 
+/**
+ * Legs for a three-quarter stance. Straddling the diagonal means one leg is
+ * further from the camera than the other, so it sits higher up the frame and
+ * is drawn a shade darker — that vertical stagger is most of what reads as
+ * "turned 45 degrees" while the character is walking.
+ */
+function warriorDiagLegs(c: PixelCanvas, cx: number, bob: number, a: number, b: number, nearRight: boolean) {
+  const top = 27 + bob
+  const leg = (x: number, y: number, off: number, far: boolean) => {
+    const len = 7 - Math.abs(off) * 0.5
+    c.px(x, y, 5, len, far ? W.steelXD : W.steelD)
+    c.px(x, y, 2, len, far ? W.steelD : W.steel)
+    c.px(x - 1, y + len, 7, 4 - Math.max(0, off) * 0.5, far ? '#2e1d0e' : W.leatherD)
+    c.px(x - 1, y + len, 7, 2, far ? W.leatherD : W.leather)
+  }
+  const nearX = nearRight ? cx : cx - 5
+  const farX = nearRight ? cx - 6 : cx + 1
+  leg(farX, top - 2, a, true)
+  leg(nearX, top + 1, b, false)
+}
+
+/**
+ * Chest plate for a turned body. Same silhouette as the head-on torso, but the
+ * plate's centre seam is pushed off-centre toward the leading edge and the far
+ * side is dropped into shadow — the eye reads that as the chest having rotated
+ * away rather than as flat armour.
+ */
+function warriorDiagTorso(c: PixelCanvas, cx: number, bob: number, tiltY: number) {
+  const top = 15 + bob
+  const h = 13
+  const halfW = 7
+  c.blob(cx - halfW, top, halfW * 2, h, W.steel)
+  c.px(cx - halfW, top + 1, 4, h - 2, W.steelD) // far side, turned away
+  c.px(cx + 1, top + 1, 3, h - 2, W.steelL) // seam catching light off-centre
+  c.px(cx + halfW - 2, top + 1, 2, h - 2, W.steel)
+  // Belt follows the slant of the hips.
+  c.px(cx - halfW, top + h - 4 + tiltY, halfW * 2, 3, W.leather)
+  c.px(cx - halfW, top + h - 4 + tiltY, halfW * 2, 1, W.leatherD)
+  c.px(cx + 1, top + h - 4 + tiltY, 4, 3, W.gold)
+}
+
+/**
+ * Three-quarter warrior, heading right and either toward the camera (`back`
+ * false, i.e. down-right) or away from it (up-right). Built off the profile
+ * rather than the head-on view because the profile already has a leading edge:
+ * widening the torso, restoring the trailing shoulder and turning the face
+ * back toward the camera rotates it the remaining 45 degrees.
+ */
+function drawWarriorDiag(c: PixelCanvas, col: number, back: boolean) {
+  const p = warriorPose(col)
+  const cx = PW / 2 - 1 + p.lunge * 0.7
+  const bob = p.bob
+  // The shoulder line slants across the heading: whichever shoulder is further
+  // from the camera rides higher up the frame. Heading up-screen flips it.
+  const lead = back ? -2 : 2
+  // Trailing arm, tucked behind the torso on the far side.
+  c.px(cx - 7, 19 + bob - lead, 5, 9, W.steelD)
+  warriorDiagLegs(c, cx, bob, p.a, p.b, back)
+  warriorDiagTorso(c, cx, bob, back ? -1 : 1)
+  if (back) {
+    // Cloak hangs across the shoulders, skewed off the trailing side.
+    c.blob(cx - 9, 15 + bob, 16, 15, W.clothD)
+    c.px(cx - 8, 16 + bob, 4, 13, W.cloth)
+  } else {
+    // Only the trailing edge of the cloak clears the body.
+    c.px(cx - 9, 16 + bob, 4, 13, W.clothD)
+    c.px(cx - 10, 20 + bob, 3, 8, W.cloth)
+  }
+  // Far pauldron: smaller, darker, and offset up the slant.
+  c.blob(cx - 10, 15 + bob - lead, 6, 6, W.steelD)
+  c.px(cx - 10, 15 + bob - lead, 6, 2, W.steel)
+  // Near pauldron leads the turn.
+  c.blob(cx - 1, 15 + bob + lead, 8, 7, W.steel)
+  c.px(cx - 1, 15 + bob + lead, 8, 2, W.steelL)
+  // Leading arm + axe, reaching out along the heading.
+  const armY = 21 + bob + lead + (p.swing >= 1 ? 1 : -1)
+  c.px(cx + 4, armY, 5, 8, W.steel)
+  c.px(cx + 4, armY, 2, 8, W.steelL)
+  c.px(cx + 5, armY + 8, 4, 3, W.skin)
+  const gx = cx + 7
+  const gy = armY + 9
+  if (p.swing === -1) drawAxe(c, gx, gy, 'up')
+  else if (p.swing === 0) drawAxe(c, gx - 1, gy - 5, 'up')
+  else if (p.swing === 1) drawAxe(c, gx, gy - 6, 'out')
+  else drawAxe(c, gx - 1, gy - 1, 'down')
+  warriorHead(c, cx + 1, bob, back ? 5 : 4)
+}
+
+/**
+ * Every sheet uses the eight rows of `facingToDir`, and only ever authors the
+ * five right-facing poses: west, south-west and north-west are their eastern
+ * counterparts flipped. Shared by the warrior and beast sheets.
+ */
+const MIRRORED_ROWS = new Set([1, 5, 7])
+
 export function makeWarriorSheet(): Sheet {
-  return buildSheet(PW, PH, 4, 7, PGROUND, (c, row, col) => {
-    if (row === 0) drawWarriorFront(c, col, false)
-    else if (row === 3) drawWarriorFront(c, col, true)
-    else if (row === 2) drawWarriorSide(c, col)
-    else {
-      c.ctx.save()
+  return buildSheet(PW, PH, 8, 7, PGROUND, (c, row, col) => {
+    c.ctx.save()
+    if (MIRRORED_ROWS.has(row)) {
       c.ctx.translate(c.w, 0)
       c.ctx.scale(-1, 1)
-      drawWarriorSide(c, col)
-      c.ctx.restore()
     }
+    if (row === 0) drawWarriorFront(c, col, false)
+    else if (row === 3) drawWarriorFront(c, col, true)
+    else if (row === 1 || row === 2) drawWarriorSide(c, col)
+    else if (row === 4 || row === 5) drawWarriorDiag(c, col, false)
+    else drawWarriorDiag(c, col, true)
+    c.ctx.restore()
   })
 }
 
@@ -483,22 +602,165 @@ function drawBeastFacing(c: PixelCanvas, s: BeastSpec, col: number, back: boolea
   c.px(cx + s.headR - 2, hy - 1, 2, 2, P.eye)
 }
 
+/**
+ * Three-quarter beast, heading right and either toward the camera (`back`
+ * false, i.e. down-right) or away from it (up-right).
+ *
+ * The spine is laid along a diagonal — rump at the trailing corner, head at
+ * the leading one — and foreshortened to about half its profile length. A
+ * geometrically honest projection would barely tilt at all (the head-on view
+ * squashes the whole body into two pixels of depth), so the rise here is
+ * deliberately exaggerated: without it a diagonal is indistinguishable from a
+ * short side view. The feet spread less than the spine does, since splayed
+ * legs converge toward the ground.
+ */
+function drawBeastDiag(c: PixelCanvas, s: BeastSpec, col: number, back: boolean) {
+  const p = beastPose(col)
+  const P = s.pal
+  const cx = s.fw / 2
+  const len = s.bodyLen * 0.5
+  const rise = s.bodyLen * 0.13
+  const legRise = rise * 0.6
+  const sign = back ? -1 : 1 // +1 puts the head at the bottom of the frame
+  const nearSide = back ? 1 : -1 // side of the spine that faces the camera
+  const flank = s.frontW * 0.95 // legs sit this far apart across the spine
+  const hip = s.bodyH * 0.42
+  // Anchor from the feet up: the near leg at the low end of the spine is the
+  // one that has to land on the ground line.
+  const cy = s.ground - s.legLen - 2 - hip - legRise + p.bob
+  const hx = cx + len / 2 + p.lunge * 0.55
+  const hy = cy + rise * sign
+  const rx = cx - len / 2 - p.lunge * 0.2
+  const ry = cy - rise * sign
+
+  /**
+   * One leg, splayed off the spine at horizontal position `ex`. `endRise` is
+   * the spine's own rise at that end; the legs take a damped share of it so
+   * the feet stay closer together than the shoulders do. The far legs go down
+   * before the body and the near ones after, or a dark far leg paints itself
+   * across the animal's back.
+   */
+  const leg = (ex: number, endRise: number, off: number, far: boolean) => {
+    const top = cy + endRise * (legRise / rise) * sign + hip
+    // The far pair is set wide enough to clear the barrel's silhouette; tucked
+    // any closer they vanish entirely and the animal reads as two-legged.
+    const out = far ? -nearSide * flank * 0.75 : nearSide * flank * 0.42
+    beastLeg(c, s, ex + out - s.legW / 2, top - (far ? 2 : 0), off, far)
+  }
+  const tail = () => {
+    // Clear of the haunch, or the barrel swallows it whole.
+    const tx = rx - s.haunchR - 2
+    const ty = ry - rise * sign * 0.4
+    if (s.tail === 'bushy') {
+      c.oval(tx, ty, 5, 4, P.furD)
+      c.oval(tx - 1, ty - sign, 3, 3, P.fur)
+    } else {
+      c.oval(tx + 3, ty, 3, 3, P.furD)
+    }
+  }
+  const head = () => {
+    // Thrown clear of the shoulder along the heading so the skull reads as a
+    // separate mass rather than merging into the barrel.
+    const hcx = hx + s.headR * 1.25
+    const hcy = hy + (s.headR * 0.8 + p.head) * sign
+    c.oval((hx + hcx) / 2, (hy + hcy) / 2, s.chestR * 0.72, s.bodyH * 0.42, P.fur)
+    c.oval(hcx, hcy, s.headR, s.headR - 0.5, P.fur)
+    // Ears ride the dome, not the shoulders — set them out at the skull's full
+    // radius and the far one detaches into a dark blob on the animal's back.
+    if (s.ear === 'point') {
+      c.cone(hcx - s.headR * 0.55, hcy - s.headR - s.earSize + 2, 4, s.earSize, P.furD)
+      c.cone(hcx + s.headR * 0.5, hcy - s.headR - s.earSize + 2, 4, s.earSize, back ? P.furD : P.fur)
+    } else {
+      c.oval(hcx - s.headR * 0.6, hcy - s.headR * 0.75, s.earSize / 2, s.earSize / 2, P.furD)
+      c.oval(hcx + s.headR * 0.55, hcy - s.headR * 0.8, s.earSize / 2, s.earSize / 2, back ? P.furD : P.fur)
+    }
+    if (back) {
+      // Turned away: skull cap only, with the muzzle just clearing its edge.
+      c.oval(hcx, hcy - s.headR * 0.35, s.headR - 1, s.headR * 0.5, P.furL)
+      c.oval(hcx + s.headR * 0.75, hcy - s.headR * 0.55, s.snout * 0.3, 1.5, P.furL)
+      return
+    }
+    c.oval(hcx, hcy - s.headR * 0.35, s.headR - 1, s.headR * 0.45, P.furL)
+    // Muzzle thrown out along the heading, nose at its tip.
+    const mx = hcx + s.headR * 0.7
+    const my = hcy + s.headR * 0.6
+    c.oval(mx, my, s.snout * 0.48, s.snout * 0.4, P.furL)
+    c.px(mx + s.snout * 0.12, my - 1, 2, 2, P.nose)
+    if (p.mouth > 0) {
+      c.px(mx - 2, my + 1, 5, 2 + p.mouth, '#2a1620')
+      c.px(mx - 2, my + 1, 2, 2, '#f4f0e6')
+      c.px(mx + 1, my + 1, 2, 2, '#f4f0e6')
+    }
+    // Both eyes visible, but crowded toward the leading side of the skull and
+    // kept tight — spread wide on a small skull they read as headlights.
+    c.px(hcx - 2, hcy - 1, 2, 2, P.eye)
+    c.dot(hcx - 1, hcy - 1, P.nose)
+    c.px(hcx + 1, hcy - 2, 2, 2, P.eye)
+    c.dot(hcx + 2, hcy - 2, P.nose)
+  }
+  const body = () => {
+    // Waisted, not a tube: the haunch and chest keep their own mass at either
+    // end so the animal doesn't read as one tapered log lying on a slope.
+    const steps = 10
+    const wide = (t: number) =>
+      (s.haunchR + (s.chestR - s.haunchR) * t) * (0.82 + 0.24 * Math.abs(t * 2 - 1))
+    const tall = (t: number) => s.bodyH * (0.34 + 0.14 * Math.abs(t * 2 - 1)) + 1
+    const at = (t: number) => [rx + (hx - rx) * t, ry + (hy - ry) * t] as const
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps
+      const [bx, by] = at(t)
+      c.oval(bx, by, wide(t), tall(t), P.fur)
+    }
+    if (s.hump) c.oval(hx - s.chestR * 0.3, hy - sign * 3, s.chestR * 0.9, 3, P.furL)
+    // Spine highlight rides the up-frame edge; the belly catches light below.
+    // Both are kept to a single scanline — swept along a diagonal, a thicker
+    // band smears into a pale wedge across the middle of the animal.
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps
+      const [bx, by] = at(t)
+      c.oval(bx, by - tall(t) * 0.52, wide(t) * 0.5, 0.7, P.furL)
+      if (!back && t > 0.3) c.oval(bx, by + tall(t) * 0.6, wide(t) * 0.4, 0.7, P.belly)
+    }
+  }
+
+  // Painter's order down the frame, so near limbs and the leading end overlap
+  // correctly: heading away puts the head at the back of the stack.
+  if (back) {
+    head()
+    leg(hx, rise, p.fa, true)
+    leg(rx, -rise, p.ba, true)
+    body()
+    leg(hx, rise, p.fb, false)
+    leg(rx, -rise, p.bb, false)
+    tail()
+  } else {
+    tail()
+    leg(rx, -rise, p.ba, true)
+    leg(hx, rise, p.fa, true)
+    body()
+    leg(rx, -rise, p.bb, false)
+    leg(hx, rise, p.fb, false)
+    head()
+  }
+}
+
 export function makeBeastSheet(spec: BeastSpec, pal?: BeastPalette, scale = 1): Sheet {
   const s: BeastSpec = pal ? { ...spec, pal } : spec
   const fw = Math.round(spec.fw * scale)
   const fh = Math.round(spec.fh * scale)
   const ground = Math.round(spec.ground * scale)
-  return buildSheet(fw, fh, 4, 6, ground, (c, row, col) => {
+  return buildSheet(fw, fh, 8, 6, ground, (c, row, col) => {
     c.ctx.save()
     if (scale !== 1) c.ctx.scale(scale, scale)
-    if (row === 0) drawBeastFacing(c, s, col, false)
-    else if (row === 3) drawBeastFacing(c, s, col, true)
-    else if (row === 2) drawBeastSide(c, s, col)
-    else {
+    if (MIRRORED_ROWS.has(row)) {
       c.ctx.translate(spec.fw, 0)
       c.ctx.scale(-1, 1)
-      drawBeastSide(c, s, col)
     }
+    if (row === 0) drawBeastFacing(c, s, col, false)
+    else if (row === 3) drawBeastFacing(c, s, col, true)
+    else if (row === 1 || row === 2) drawBeastSide(c, s, col)
+    else if (row === 4 || row === 5) drawBeastDiag(c, s, col, false)
+    else drawBeastDiag(c, s, col, true)
     c.ctx.restore()
   })
 }

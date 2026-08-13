@@ -86,11 +86,19 @@ cheap.
 
 **All art is generated at boot**, in `render/sprites.ts` on top of `render/pixel.ts`.
 Bodies are parametric — a wolf and a bear come out of the same `drawBeastSide` /
-`drawBeastFacing` routines with different `BeastSpec` numbers; elites are the same body at
-a larger scale with a swapped palette. Each finished frame gets a silhouette-outline pass,
-which is what makes procedural shapes read as deliberate sprites. Note `PixelCanvas.spike`
-tapers **downward** (wide at top) and `cone` tapers **upward** (point at top) — picking the
-wrong one silently produces upside-down trees, ears, flames and tents.
+`drawBeastFacing` / `drawBeastDiag` routines with different `BeastSpec` numbers; elites are
+the same body at a larger scale with a swapped palette. Each finished frame gets a
+silhouette-outline pass, which is what makes procedural shapes read as deliberate sprites.
+Note `PixelCanvas.spike` tapers **downward** (wide at top) and `cone` tapers **upward**
+(point at top) — picking the wrong one silently produces upside-down trees, ears, flames
+and tents.
+
+**Sheets are 8 rows, one per facing octant**, indexed by `facingToDir` in `core/math.ts`:
+`0 S, 1 W, 2 E, 3 N, 4 SE, 5 SW, 6 NE, 7 NW`. Only the five right-facing poses are
+authored; `MIRRORED_ROWS` flips them for W/SW/NW. Cardinals keep rows 0..3 because the
+corpse bake pulls the side view from row 2 by index. The three-quarter poses exaggerate
+their tilt on purpose — the head-on views squash the whole body into about two pixels of
+depth, so an honest projection of a diagonal is indistinguishable from a short side view.
 
 **In-world text uses the 5x7 bitmap font in `render/font.ts`, never `fillText`.** Canvas
 text would be antialiased into the low-res buffer and then magnified into mush.

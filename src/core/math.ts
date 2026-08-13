@@ -36,13 +36,21 @@ export function angleDelta(from: number, to: number): number {
   return d
 }
 
-/** Sprite facing bucket: 0 = down, 1 = left, 2 = right, 3 = up. */
-export function facingToDir(angle: number): 0 | 1 | 2 | 3 {
+/**
+ * Sprite facing bucket, one per sheet row:
+ * 0 = down, 1 = left, 2 = right, 3 = up,
+ * 4 = down-right, 5 = down-left, 6 = up-right, 7 = up-left.
+ *
+ * The cardinals keep rows 0..3 so anything indexing a single row (the corpse
+ * bake pulls the side view from row 2) is unaffected by the diagonals.
+ */
+const DIR_BY_OCTANT = [2, 4, 0, 5, 1, 7, 3, 6] as const
+
+export function facingToDir(angle: number): 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 {
   const a = ((angle % TAU) + TAU) % TAU
-  if (a >= TAU * 0.125 && a < TAU * 0.375) return 0
-  if (a >= TAU * 0.375 && a < TAU * 0.625) return 1
-  if (a >= TAU * 0.625 && a < TAU * 0.875) return 3
-  return 2
+  // Octants are centred on each of the eight headings, so a heading sits in
+  // the middle of its bucket rather than on a boundary.
+  return DIR_BY_OCTANT[Math.round(a / (TAU / 8)) % 8]!
 }
 
 /** Deterministic 32-bit PRNG (mulberry32). */
