@@ -344,6 +344,13 @@ export function makeWarriorSheet(): Sheet {
  * ------------------------------------------------------------------ */
 
 export interface BeastSpec {
+  /**
+   * Which trio of draw routines builds the sheet. A boar is a quadruped with
+   * different numbers, so it is a `beast`; a spider and a rook are not, and
+   * pretending otherwise would have meant eight parameters that mean nothing
+   * to the other four species.
+   */
+  body: 'beast' | 'spider' | 'bird'
   fw: number
   fh: number
   ground: number
@@ -358,17 +365,20 @@ export interface BeastSpec {
   headX: number
   headY: number
   snout: number
-  ear: 'point' | 'round'
+  ear: 'point' | 'round' | 'none'
   earSize: number
   legLen: number
   legW: number
-  tail: 'bushy' | 'stub'
+  tail: 'bushy' | 'stub' | 'fan'
   hump: boolean
   frontW: number
+  /** Two tusks curling up out of the snout. */
+  tusks?: boolean
   pal: BeastPalette
 }
 
 export const WOLF_SPEC: BeastSpec = {
+  body: 'beast',
   fw: 46,
   fh: 34,
   ground: 31,
@@ -401,6 +411,7 @@ export const WOLF_SPEC: BeastSpec = {
 }
 
 export const BEAR_SPEC: BeastSpec = {
+  body: 'beast',
   fw: 58,
   fh: 44,
   ground: 41,
@@ -432,6 +443,124 @@ export const BEAR_SPEC: BeastSpec = {
   },
 }
 
+/**
+ * A boar out of the same routines as the wolf and the bear: short legs, a
+ * front-heavy barrel, a head carried low, and two tusks. The proof that the
+ * parametric body was worth building.
+ */
+export const BOAR_SPEC: BeastSpec = {
+  body: 'beast',
+  fw: 50,
+  fh: 34,
+  ground: 31,
+  bodyX: 9,
+  bodyLen: 24,
+  bodyY: 13,
+  bodyH: 10,
+  haunchR: 6,
+  chestR: 8,
+  headR: 5,
+  headX: 38,
+  headY: 16,
+  snout: 7,
+  ear: 'point',
+  earSize: 3,
+  legLen: 7,
+  legW: 3,
+  tail: 'stub',
+  hump: true,
+  frontW: 9,
+  tusks: true,
+  pal: {
+    fur: '#6a5340',
+    furD: '#3f3020',
+    furL: '#8b7053',
+    belly: '#a08663',
+    nose: '#1e1610',
+    eye: '#f2a03a',
+    claw: '#efe4cc',
+  },
+}
+
+/**
+ * A fen spider. Eight legs in four pairs, a heavy abdomen behind a small
+ * cephalothorax, and a cluster of eyes instead of a face — `headR` is the eye
+ * patch, `haunchR` the abdomen, `chestR` the body the legs hang off.
+ */
+export const SPIDER_SPEC: BeastSpec = {
+  body: 'spider',
+  fw: 46,
+  fh: 30,
+  ground: 27,
+  bodyX: 9,
+  // Long enough that the abdomen and the cephalothorax are two masses with a
+  // waist between them. Closer together they merge into one slab and the
+  // animal reads as a beetle.
+  bodyLen: 24,
+  bodyY: 11,
+  bodyH: 9,
+  haunchR: 7,
+  chestR: 4.5,
+  headR: 4,
+  headX: 32,
+  headY: 14,
+  snout: 4,
+  ear: 'none',
+  earSize: 0,
+  legLen: 8,
+  legW: 2,
+  tail: 'stub',
+  hump: false,
+  frontW: 7,
+  pal: {
+    fur: '#4a4436',
+    furD: '#2a2620',
+    furL: '#6d6550',
+    belly: '#8fa05a',
+    nose: '#171410',
+    eye: '#d8f06a',
+    claw: '#e8e2cc',
+  },
+}
+
+/**
+ * A carrion rook. `bodyLen` is the barrel from breast to tail, `snout` the
+ * beak, `haunchR` the fan of tail feathers, and the walk cycle is a wingbeat
+ * rather than legs — these things are almost never on the ground.
+ */
+export const CORVID_SPEC: BeastSpec = {
+  body: 'bird',
+  fw: 40,
+  fh: 30,
+  ground: 27,
+  bodyX: 12,
+  bodyLen: 14,
+  bodyY: 11,
+  bodyH: 8,
+  haunchR: 5,
+  chestR: 5,
+  headR: 4,
+  headX: 27,
+  headY: 9,
+  snout: 5,
+  ear: 'none',
+  earSize: 0,
+  legLen: 5,
+  legW: 2,
+  tail: 'fan',
+  hump: false,
+  frontW: 6,
+  pal: {
+    fur: '#2f3342',
+    furD: '#1a1d26',
+    furL: '#4e5468',
+    belly: '#3b4051',
+    nose: '#c2ac5c',
+    eye: '#ece4cc',
+    claw: '#c2ac5c',
+  },
+}
+
 export const ALPHA_WOLF_PAL: BeastPalette = {
   fur: '#3f4358',
   furD: '#272a3b',
@@ -452,6 +581,36 @@ export const ELDER_BEAR_PAL: BeastPalette = {
   claw: '#fff3dc',
 }
 
+export const IRONHIDE_BOAR_PAL: BeastPalette = {
+  fur: '#4c4a44',
+  furD: '#2b2a26',
+  furL: '#736f61',
+  belly: '#8a8375',
+  nose: '#17150f',
+  eye: '#ff6a3d',
+  claw: '#fff0d4',
+}
+
+export const BROODMOTHER_PAL: BeastPalette = {
+  fur: '#3a2f3e',
+  furD: '#211a24',
+  furL: '#5d4d61',
+  belly: '#c05a7a',
+  nose: '#140f16',
+  eye: '#ff5c8a',
+  claw: '#f2e8dc',
+}
+
+export const STORMCROW_PAL: BeastPalette = {
+  fur: '#39324f',
+  furD: '#211c30',
+  furL: '#5f5581',
+  belly: '#463f5f',
+  nose: '#d8c06a',
+  eye: '#8fe0ff',
+  claw: '#d8c06a',
+}
+
 /** Frame 0..3 walk, 4..5 lunge/bite. */
 function beastPose(col: number) {
   const walk = [
@@ -466,6 +625,15 @@ function beastPose(col: number) {
     { bob: 1, fa: 3, fb: 3, ba: -1, bb: -1, lunge: 3, head: 1, mouth: 2 },
   ]
   return atk[col - 4]!
+}
+
+/**
+ * A tusk. `cone` tapers *upward* — point at the top — which is the whole
+ * reason to use it here: a tusk curls up out of the jaw, and reaching for
+ * `spike` instead grows a downward fang and turns a boar into a sabretooth.
+ */
+function tusk(c: PixelCanvas, cx: number, baseY: number, size: number, color: string) {
+  c.cone(cx, baseY - size, 3, size, color)
 }
 
 function beastLeg(c: PixelCanvas, s: BeastSpec, x: number, top: number, off: number, dark: boolean) {
@@ -529,6 +697,10 @@ function drawBeastSide(c: PixelCanvas, s: BeastSpec, col: number) {
   const sx = hx + s.headR - 1
   c.px(sx, hy - 1, s.snout, 4, P.furL)
   c.px(sx + s.snout - 2, hy - 1, 2, 2, P.nose)
+  if (s.tusks) {
+    tusk(c, sx + s.snout - 3, hy + 2 + p.mouth, 5, P.claw)
+    tusk(c, sx + 1, hy + 2, 4, P.furD)
+  }
   if (p.mouth > 0) {
     c.px(sx, hy + 3 + p.mouth, s.snout - 1, 2, P.furD)
     c.px(sx + 1, hy + 2, 2, 2, '#f4f0e6')
@@ -592,6 +764,10 @@ function drawBeastFacing(c: PixelCanvas, s: BeastSpec, col: number, back: boolea
   // Muzzle
   c.oval(cx, hy + s.headR - 1, s.headR - 2, 2.5, P.furL)
   c.px(cx - 1, hy + s.headR - 3, 2, 2, P.nose)
+  if (s.tusks) {
+    tusk(c, cx - s.headR + 1, hy + s.headR + 1, 5, P.claw)
+    tusk(c, cx + s.headR - 1, hy + s.headR + 1, 5, P.claw)
+  }
   if (p.mouth > 0) {
     c.px(cx - 3, hy + s.headR, 6, 2 + p.mouth, '#2a1620')
     c.px(cx - 3, hy + s.headR, 2, 2, '#f4f0e6')
@@ -686,6 +862,10 @@ function drawBeastDiag(c: PixelCanvas, s: BeastSpec, col: number, back: boolean)
     const my = hcy + s.headR * 0.6
     c.oval(mx, my, s.snout * 0.48, s.snout * 0.4, P.furL)
     c.px(mx + s.snout * 0.12, my - 1, 2, 2, P.nose)
+    if (s.tusks) {
+      tusk(c, mx + s.snout * 0.3, my + 2, 5, P.claw)
+      tusk(c, mx - s.snout * 0.35, my + 1, 4, P.furD)
+    }
     if (p.mouth > 0) {
       c.px(mx - 2, my + 1, 5, 2 + p.mouth, '#2a1620')
       c.px(mx - 2, my + 1, 2, 2, '#f4f0e6')
@@ -752,6 +932,325 @@ function drawBeastDiag(c: PixelCanvas, s: BeastSpec, col: number, back: boolean)
   }
 }
 
+/* ---------------- spider ---------------- */
+
+/**
+ * One leg: out and up to a raised knee, then down to the ground. Two strokes
+ * rather than one is the entire difference between a spider and a bug with
+ * sticks glued to it — the knee above the body is the silhouette people read.
+ *
+ * `lift` is how high the knee rides, `reach` how far the foot lands from the
+ * body, and `step` the walk offset that makes the set of eight ripple instead
+ * of moving as one.
+ */
+function spiderLeg(
+  c: PixelCanvas,
+  s: BeastSpec,
+  hx: number,
+  hy: number,
+  reach: number,
+  lift: number,
+  step: number,
+  dark: boolean,
+) {
+  const color = dark ? s.pal.furD : s.pal.fur
+  const kneeX = hx + reach * 0.55
+  const kneeY = hy - lift
+  const footX = hx + reach + step
+  const footY = hy + s.legLen - Math.abs(step) * 0.35
+  c.line(hx, hy, kneeX, kneeY, color, s.legW)
+  c.line(kneeX, kneeY, footX, footY, color, Math.max(1, s.legW - 1))
+  c.dot(Math.round(footX), Math.round(footY), s.pal.claw)
+}
+
+/** Eye cluster: two big forward eyes and a row of small ones above them. */
+function spiderEyes(c: PixelCanvas, s: BeastSpec, cx: number, cy: number, spread: number) {
+  const P = s.pal
+  c.px(cx - spread, cy, 2, 2, P.eye)
+  c.px(cx + spread - 1, cy, 2, 2, P.eye)
+  c.dot(cx - spread + 1, cy - 2, P.eye)
+  c.dot(cx + spread - 2, cy - 2, P.eye)
+  c.dot(cx - 1, cy - 2, P.eye)
+  c.dot(cx, cy - 3, P.eye)
+}
+
+function drawSpiderSide(c: PixelCanvas, s: BeastSpec, col: number) {
+  const p = beastPose(col)
+  const P = s.pal
+  const rearX = s.bodyX + p.lunge * 0.3
+  const frontX = s.bodyX + s.bodyLen + p.lunge
+  const cy = s.bodyY + s.bodyH / 2 + p.bob
+  // Four pairs, fanned front to back. The far set goes down first and dark.
+  const anchors = [0.85, 0.6, 0.38, 0.16]
+  const steps = [p.fa, p.fb, p.ba, p.bb]
+
+  for (let i = 0; i < 4; i++) {
+    const ax = rearX + (frontX - rearX) * anchors[i]!
+    const dir = i < 2 ? 1 : -1
+    spiderLeg(c, s, ax, cy + 1, dir * (7 + i), 6 - i, steps[i]! * dir, true)
+  }
+
+  // Waist first, so both masses sit on top of it and the join stays thin.
+  const waistX = rearX + s.haunchR * 2 - 1
+  c.px(waistX, cy - 1, frontX - s.chestR * 2 - waistX + 2, 3, P.furD)
+  // Abdomen behind, cephalothorax in front.
+  c.oval(rearX + s.haunchR - 1, cy, s.haunchR, s.haunchR - 1, P.fur)
+  c.oval(rearX + s.haunchR - 2, cy - 1, s.haunchR * 0.55, s.haunchR * 0.4, P.furL)
+  // Hourglass marking — the one bright thing on the animal.
+  c.px(rearX + s.haunchR - 2, cy - 1, 3, 3, P.belly)
+  c.px(rearX + s.haunchR - 1, cy, 1, 1, P.furD)
+  c.oval(frontX - s.chestR, cy, s.chestR, s.chestR - 0.5, P.fur)
+  c.oval(frontX - s.chestR, cy - 1.5, s.chestR - 1, s.chestR * 0.4, P.furL)
+
+  for (let i = 0; i < 4; i++) {
+    const ax = rearX + (frontX - rearX) * anchors[i]!
+    const dir = i < 2 ? 1 : -1
+    spiderLeg(c, s, ax, cy - 1, dir * (6 + i), 7 - i, steps[3 - i]! * dir, false)
+  }
+
+  // Head end: eyes on the leading face, fangs below them.
+  const hx = frontX - 2
+  spiderEyes(c, s, hx - 1, cy - 2, 2)
+  c.px(hx, cy + 1, s.snout - 1, 2, P.furD)
+  c.px(hx + s.snout - 3, cy + 2 + p.mouth, 2, 2 + p.mouth, P.claw)
+  c.px(hx + s.snout - 5, cy + 2 + p.mouth, 2, 2 + p.mouth, P.claw)
+}
+
+function drawSpiderFacing(c: PixelCanvas, s: BeastSpec, col: number, back: boolean) {
+  const p = beastPose(col)
+  const P = s.pal
+  const cx = s.fw / 2
+  const cy = s.bodyY + s.bodyH / 2 + p.bob + 2
+  const steps = [p.fa, p.fb, p.ba, p.bb]
+
+  /**
+   * Four legs a side, staggered in reach and knee height. Head-on is the view
+   * that has to sell "eight legs" — a symmetric pair per side reads as four,
+   * and four is a lizard.
+   */
+  const legRow = (dark: boolean, first: number) => {
+    for (let i = 0; i < 4; i++) {
+      const side = i % 2 === 0 ? -1 : 1
+      const rank = (first + (i >> 1)) % 2
+      spiderLeg(
+        c,
+        s,
+        cx + side * 2,
+        cy - 2 + rank * 3,
+        side * (7 + rank * 4),
+        7 - rank * 3,
+        steps[i]! * side,
+        dark,
+      )
+    }
+  }
+  legRow(true, 0)
+
+  if (back) {
+    // Turned away, the abdomen is nearly the whole animal.
+    legRow(false, 1)
+    c.oval(cx, cy + 1, s.haunchR + 1, s.haunchR, P.fur)
+    c.oval(cx, cy - 1, s.haunchR * 0.6, s.haunchR * 0.45, P.furL)
+    c.px(cx - 1, cy + 1, 3, 4, P.belly)
+    return
+  }
+
+  c.oval(cx, cy + 2, s.haunchR, s.haunchR - 1, P.fur)
+  legRow(false, 1)
+  c.oval(cx, cy - 2, s.chestR + 1, s.chestR - 0.5, P.fur)
+  c.oval(cx, cy - 3, s.chestR - 1, s.chestR * 0.4, P.furL)
+  spiderEyes(c, s, cx, cy - 4, 3)
+  // Fangs, spread on the strike frames.
+  const gape = p.mouth
+  c.px(cx - 3 - gape, cy - 1, 2, 3 + gape, P.claw)
+  c.px(cx + 1 + gape, cy - 1, 2, 3 + gape, P.claw)
+}
+
+function drawSpiderDiag(c: PixelCanvas, s: BeastSpec, col: number, back: boolean) {
+  const p = beastPose(col)
+  const P = s.pal
+  const cx = s.fw / 2
+  const sign = back ? -1 : 1
+  const len = s.bodyLen * 0.55
+  const rise = s.bodyLen * 0.16
+  const cy = s.bodyY + s.bodyH / 2 + p.bob + 1
+  const hx = cx + len / 2 + p.lunge * 0.5
+  const hy = cy + rise * sign
+  const rx = cx - len / 2
+  const ry = cy - rise * sign
+  const steps = [p.fa, p.fb, p.ba, p.bb]
+
+  const legsAt = (ax: number, ay: number, dark: boolean) => {
+    for (let i = 0; i < 4; i++) {
+      const side = i % 2 === 0 ? -1 : 1
+      spiderLeg(c, s, ax, ay, side * (7 + i), 6 - (i >> 1) * 2, steps[i]! * side, dark)
+    }
+  }
+
+  legsAt(rx, ry, true)
+  legsAt(hx, hy, true)
+  c.oval(rx + 1, ry, s.haunchR, s.haunchR - 1.5, P.fur)
+  c.oval(rx + 1, ry - 1.5, s.haunchR * 0.55, s.haunchR * 0.35, P.furL)
+  c.px(Math.round(rx), Math.round(ry), 3, 3, P.belly)
+  c.oval(hx, hy, s.chestR, s.chestR - 1, P.fur)
+  c.oval(hx, hy - 1.5, s.chestR - 1, s.chestR * 0.4, P.furL)
+  legsAt(hx, hy + 1, false)
+  if (!back) {
+    spiderEyes(c, s, hx + 1, hy - 2, 2)
+    c.px(hx + 1, hy + 1, 2, 2 + p.mouth, P.claw)
+    c.px(hx - 2, hy + 1, 2, 2 + p.mouth, P.claw)
+  }
+}
+
+/* ---------------- corvid ---------------- */
+
+/**
+ * The walk cycle is a wingbeat: frames 0..3 run the wings from level, up,
+ * level, down, and the body bobs against them. A rook that walked would read
+ * as a very odd chicken.
+ */
+function wingLift(col: number): number {
+  const beat = [0, -4, 0, 3]
+  return col < 4 ? beat[col]! : (col === 4 ? -5 : 4)
+}
+
+/** Beak: three shortening rows, drawn by hand — a horizontal taper has no helper. */
+function beak(c: PixelCanvas, x: number, y: number, len: number, gape: number, P: BeastPalette) {
+  c.px(x, y - 1, len, 1, P.nose)
+  c.px(x, y, len - 1, 1, P.claw)
+  if (gape > 0) {
+    c.px(x, y + 1 + gape, len - 2, 1, P.nose)
+    c.px(x - 1, y, 2, 2 + gape, '#2a1620')
+  } else {
+    c.px(x, y + 1, len - 2, 1, P.nose)
+  }
+}
+
+function drawCorvidSide(c: PixelCanvas, s: BeastSpec, col: number) {
+  const p = beastPose(col)
+  const P = s.pal
+  const lift = wingLift(col)
+  const rearX = s.bodyX + p.lunge * 0.3
+  const frontX = s.bodyX + s.bodyLen + p.lunge
+  const cy = s.bodyY + s.bodyH / 2 + p.bob - Math.round(lift * 0.3)
+
+  // Far wing, behind the body.
+  c.oval(rearX + 7, cy - 1 + lift * 0.6, 7, 3, P.furD)
+  // Tail: a fan of feathers trailing the barrel.
+  if (s.tail === 'fan') {
+    c.oval(rearX - 3, cy + 1, 6, 2.5, P.furD)
+    c.px(rearX - 8, cy, 6, 3, P.furD)
+    c.px(rearX - 8, cy, 6, 1, P.furL)
+  }
+
+  // Body + breast.
+  c.oval(rearX + s.bodyLen / 2, cy, s.bodyLen / 2, s.bodyH / 2, P.fur)
+  c.oval(frontX - s.chestR, cy + 1, s.chestR, s.bodyH / 2 - 0.5, P.fur)
+  c.px(rearX + 3, cy - s.bodyH / 2, s.bodyLen - 6, 2, P.furL)
+  c.oval(frontX - s.chestR, cy + 2, s.chestR - 2, 2, P.belly)
+
+  // Legs tucked up in flight, down when level.
+  if (lift === 0) {
+    c.px(rearX + 9, cy + 4, s.legW, s.legLen, P.claw)
+    c.px(rearX + 13, cy + 4, s.legW, s.legLen - 1, P.claw)
+  } else {
+    c.px(rearX + 9, cy + 4, s.legW + 2, 2, P.claw)
+  }
+
+  // Near wing, over the body, angled with the beat.
+  c.oval(rearX + 9, cy - 2 + lift, 8, 3.5, P.fur)
+  c.oval(rearX + 6, cy - 2 + lift * 1.2, 5, 2.5, P.furL)
+  c.px(rearX + 3, cy - 2 + lift * 1.3, 6, 2, P.furD)
+
+  // Head + beak.
+  const hx = s.headX + p.lunge
+  const hy = s.headY + p.bob + p.head - Math.round(lift * 0.3)
+  c.px(frontX - 4, hy + 2, 5, s.bodyH - 3, P.fur)
+  c.oval(hx, hy, s.headR, s.headR - 0.5, P.fur)
+  c.oval(hx, hy - 1.5, s.headR - 1, s.headR * 0.45, P.furL)
+  beak(c, hx + s.headR - 1, hy + 1, s.snout, p.mouth, P)
+  c.px(hx, hy - 2, 2, 2, P.eye)
+  c.dot(hx + 1, hy - 2, P.nose)
+}
+
+function drawCorvidFacing(c: PixelCanvas, s: BeastSpec, col: number, back: boolean) {
+  const p = beastPose(col)
+  const P = s.pal
+  const lift = wingLift(col)
+  const cx = s.fw / 2
+  const cy = s.bodyY + s.bodyH / 2 + p.bob - Math.round(lift * 0.3)
+
+  // Wings sweep out *and* down: a pair of flat bars either side is an
+  // aeroplane, and the droop at the tip is what makes it a bird.
+  for (const side of [-1, 1]) {
+    c.oval(cx + side * 6, cy - 1 + lift, 5, 2.5, side < 0 ? P.fur : P.furD)
+    c.oval(cx + side * 11, cy + 1 + lift * 1.3, 4, 1.5, P.furD)
+  }
+  if (s.tail === 'fan') c.oval(cx, cy + s.bodyH / 2 + 2, 4, 2.5, P.furD)
+
+  c.oval(cx, cy, s.frontW * 0.85, s.bodyH / 2 + 1.5, P.fur)
+  if (!back) c.oval(cx, cy + 2, s.frontW * 0.5, 2, P.belly)
+  else c.px(cx - 3, cy - s.bodyH / 2, 6, 2, P.furL)
+
+  const hy = s.headY + p.bob + p.head - Math.round(lift * 0.3) + (back ? 1 : 0)
+  // Neck, so the skull is not a ball balanced on a wing.
+  c.px(cx - 2, hy, 4, s.bodyY - hy + 3, P.fur)
+  c.oval(cx, hy, s.headR, s.headR - 0.5, P.fur)
+  if (back) {
+    c.oval(cx, hy - 1, s.headR - 1, s.headR * 0.45, P.furL)
+    return
+  }
+  c.oval(cx, hy - 1.5, s.headR - 1, s.headR * 0.4, P.furL)
+  // Head-on the beak is foreshortened to a wedge pointing at you.
+  c.spike(cx, hy + 1, 4, 3 + p.mouth, P.nose)
+  c.px(cx - s.headR + 1, hy - 1, 2, 2, P.eye)
+  c.px(cx + s.headR - 2, hy - 1, 2, 2, P.eye)
+}
+
+function drawCorvidDiag(c: PixelCanvas, s: BeastSpec, col: number, back: boolean) {
+  const p = beastPose(col)
+  const P = s.pal
+  const lift = wingLift(col)
+  const cx = s.fw / 2
+  const sign = back ? -1 : 1
+  const len = s.bodyLen * 0.6
+  const rise = s.bodyLen * 0.18
+  const cy = s.bodyY + s.bodyH / 2 + p.bob - Math.round(lift * 0.3)
+  const hx = cx + len / 2 + p.lunge * 0.5
+  const hy = cy + rise * sign
+  const rx = cx - len / 2
+  const ry = cy - rise * sign
+
+  // Far wing first, then body, then near wing — the same painter's order the
+  // quadruped diag uses, for the same reason.
+  c.oval(cx - 4, cy - 2 + lift * 0.7, 7, 3, P.furD)
+  if (s.tail === 'fan') {
+    c.oval(rx - 4, ry, 5, 2.5, P.furD)
+    c.px(Math.round(rx - 8), Math.round(ry - 1), 5, 3, P.furD)
+  }
+  c.sweep((t) => {
+    const bx = rx + (hx - rx) * t
+    const by = ry + (hy - ry) * t
+    return { x: bx, y: by, rx: s.chestR * (0.7 + 0.3 * t), ry: s.bodyH * 0.36 + 1 }
+  }, P.fur)
+  c.oval(cx, cy - s.bodyH * 0.3, s.chestR * 0.8, 0.6, P.furL)
+  if (!back) c.oval(hx - 1, hy + 2, s.chestR * 0.6, 1.5, P.belly)
+  c.oval(cx + 1, cy - 2 + lift, 7, 3, P.fur)
+  c.px(Math.round(cx - 5), Math.round(cy - 2 + lift * 1.2), 6, 2, P.furL)
+
+  // Head thrown clear of the shoulder and lifted off the spine, or the skull
+  // is swallowed by the swept body and the bird reads as a thrown stone.
+  const hcx = hx + s.headR * 1.1
+  const hcy = hy + (s.headR * 0.5 + p.head) * sign - 2
+  c.px(Math.round(hx - 1), Math.round(Math.min(hy, hcy)), 3, Math.abs(hcy - hy) + 2, P.fur)
+  c.oval(hcx, hcy, s.headR, s.headR - 0.5, P.fur)
+  c.oval(hcx, hcy - 1.5, s.headR - 1, s.headR * 0.4, P.furL)
+  if (back) return
+  beak(c, Math.round(hcx + s.headR - 1), Math.round(hcy + 1), s.snout - 1, p.mouth, P)
+  c.px(hcx - 2, hcy - 2, 2, 2, P.eye)
+  c.px(hcx + 1, hcy - 2, 2, 2, P.eye)
+}
+
 /**
  * Grows a beast by its numbers rather than by a canvas transform. A fractional
  * `ctx.scale` lands every rect edge on a fraction of a pixel, and `fillRect`
@@ -784,20 +1283,34 @@ function scaleSpec(s: BeastSpec, k: number): BeastSpec {
   }
 }
 
+/** The three views a body has to supply, in the order the rows want them. */
+interface BodyDraw {
+  facing: (c: PixelCanvas, s: BeastSpec, col: number, back: boolean) => void
+  side: (c: PixelCanvas, s: BeastSpec, col: number) => void
+  diag: (c: PixelCanvas, s: BeastSpec, col: number, back: boolean) => void
+}
+
+const BODIES: Record<BeastSpec['body'], BodyDraw> = {
+  beast: { facing: drawBeastFacing, side: drawBeastSide, diag: drawBeastDiag },
+  spider: { facing: drawSpiderFacing, side: drawSpiderSide, diag: drawSpiderDiag },
+  bird: { facing: drawCorvidFacing, side: drawCorvidSide, diag: drawCorvidDiag },
+}
+
 export function makeBeastSheet(spec: BeastSpec, pal?: BeastPalette, scale = 1): Sheet {
   const base: BeastSpec = pal ? { ...spec, pal } : spec
   const s = scale === 1 ? base : scaleSpec(base, scale)
+  const body = BODIES[s.body]
   return buildSheet(s.fw, s.fh, 8, 6, s.ground, (c, row, col) => {
     c.ctx.save()
     if (MIRRORED_ROWS.has(row)) {
       c.ctx.translate(s.fw, 0)
       c.ctx.scale(-1, 1)
     }
-    if (row === 0) drawBeastFacing(c, s, col, false)
-    else if (row === 3) drawBeastFacing(c, s, col, true)
-    else if (row === 1 || row === 2) drawBeastSide(c, s, col)
-    else if (row === 4 || row === 5) drawBeastDiag(c, s, col, false)
-    else drawBeastDiag(c, s, col, true)
+    if (row === 0) body.facing(c, s, col, false)
+    else if (row === 3) body.facing(c, s, col, true)
+    else if (row === 1 || row === 2) body.side(c, s, col)
+    else if (row === 4 || row === 5) body.diag(c, s, col, false)
+    else body.diag(c, s, col, true)
     c.ctx.restore()
   })
 }
@@ -1233,33 +1746,45 @@ function makeCorpse(sheet: Sheet): HTMLCanvasElement {
   return c.cv
 }
 
+/**
+ * Every beast sheet in the game, keyed by the name `EnemyType.sheet` /
+ * `eliteSheet` refers to. An elite is the same spec with a palette swap and a
+ * size — the entry says so rather than being a second body.
+ */
+const BEAST_SHEETS = {
+  wolf: { spec: WOLF_SPEC },
+  alphaWolf: { spec: WOLF_SPEC, pal: ALPHA_WOLF_PAL, scale: 1.25 },
+  bear: { spec: BEAR_SPEC },
+  elderBear: { spec: BEAR_SPEC, pal: ELDER_BEAR_PAL, scale: 1.2 },
+  boar: { spec: BOAR_SPEC },
+  ironhideBoar: { spec: BOAR_SPEC, pal: IRONHIDE_BOAR_PAL, scale: 1.22 },
+  spider: { spec: SPIDER_SPEC },
+  broodmother: { spec: SPIDER_SPEC, pal: BROODMOTHER_PAL, scale: 1.3 },
+  corvid: { spec: CORVID_SPEC },
+  stormcrow: { spec: CORVID_SPEC, pal: STORMCROW_PAL, scale: 1.35 },
+} satisfies Record<string, { spec: BeastSpec; pal?: BeastPalette; scale?: number }>
+
+export type BeastSheetId = keyof typeof BEAST_SHEETS
+
 export interface Art {
   warrior: Sheet
-  wolf: Sheet
-  alphaWolf: Sheet
-  bear: Sheet
-  elderBear: Sheet
+  beasts: Record<BeastSheetId, Sheet>
   props: Record<string, Prop[]>
   corpses: Record<string, HTMLCanvasElement>
 }
 
 export function buildArt(): Art {
-  const wolf = makeBeastSheet(WOLF_SPEC)
-  const alphaWolf = makeBeastSheet(WOLF_SPEC, ALPHA_WOLF_PAL, 1.25)
-  const bear = makeBeastSheet(BEAR_SPEC)
-  const elderBear = makeBeastSheet(BEAR_SPEC, ELDER_BEAR_PAL, 1.2)
+  const beasts = {} as Record<BeastSheetId, Sheet>
+  const corpses: Record<string, HTMLCanvasElement> = {}
+  for (const [name, def] of Object.entries(BEAST_SHEETS)) {
+    const sheet = makeBeastSheet(def.spec, 'pal' in def ? def.pal : undefined, 'scale' in def ? def.scale : 1)
+    beasts[name as BeastSheetId] = sheet
+    corpses[name] = makeCorpse(sheet)
+  }
   return {
     warrior: makeWarriorSheet(),
-    wolf,
-    alphaWolf,
-    bear,
-    elderBear,
+    beasts,
     props: makeProps(),
-    corpses: {
-      wolf: makeCorpse(wolf),
-      alphaWolf: makeCorpse(alphaWolf),
-      bear: makeCorpse(bear),
-      elderBear: makeCorpse(elderBear),
-    },
+    corpses,
   }
 }

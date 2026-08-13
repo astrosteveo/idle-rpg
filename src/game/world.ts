@@ -34,7 +34,7 @@ export function isSolidTile(t: Tile): boolean {
   return t === T.Water
 }
 
-export type BiomeId = 'vale' | 'thicket' | 'ridge' | 'wilds'
+export type BiomeId = 'vale' | 'thicket' | 'ridge' | 'downs' | 'fen' | 'crags' | 'wilds'
 
 export interface Region {
   id: BiomeId
@@ -136,6 +136,53 @@ export const REGIONS: Region[] = [
     eliteNodes: 2,
     color: '#6b6a5d',
   },
+  {
+    id: 'downs',
+    name: 'Thornfell Downs',
+    x: 820,
+    y: 3860,
+    radius: 700,
+    kind: 'boar',
+    levelMin: 5,
+    levelMax: 9,
+    nodes: 8,
+    packMin: 2,
+    packMax: 3,
+    eliteNodes: 2,
+    color: '#8a7a44',
+  },
+  {
+    id: 'fen',
+    name: 'Mirefen Hollow',
+    x: 4020,
+    y: 3620,
+    radius: 660,
+    kind: 'spider',
+    levelMin: 10,
+    levelMax: 14,
+    nodes: 8,
+    packMin: 2,
+    packMax: 4,
+    eliteNodes: 2,
+    color: '#3f6a52',
+  },
+  {
+    id: 'crags',
+    name: 'Ravencrag',
+    x: 2500,
+    y: 760,
+    radius: 560,
+    kind: 'corvid',
+    levelMin: 14,
+    levelMax: 18,
+    // Fewer, fuller roosts: the crag is the smallest region on the map, and a
+    // node count it cannot physically place is a number that lies.
+    nodes: 6,
+    packMin: 4,
+    packMax: 6,
+    eliteNodes: 2,
+    color: '#565270',
+  },
 ]
 
 /** The level a region is reckoned at — the middle of its band. */
@@ -163,21 +210,38 @@ export const CAMPS: Camp[] = [
   { id: 'hearthglen', name: 'Hearthglen Camp', x: 2400, y: 3660, radius: 250, startDiscovered: true },
   { id: 'rangers', name: "Ranger's Rest", x: 3420, y: 2440, radius: 235, startDiscovered: false },
   { id: 'stonewatch', name: 'Stonewatch Hold', x: 1520, y: 2380, radius: 235, startDiscovered: false },
+  { id: 'thornrest', name: 'Thornrest', x: 1560, y: 3800, radius: 230, startDiscovered: false },
+  { id: 'mirewatch', name: 'Mirewatch Post', x: 3820, y: 2980, radius: 230, startDiscovered: false },
+  { id: 'rookrest', name: 'Rookrest', x: 2440, y: 1560, radius: 230, startDiscovered: false },
 ]
 
-/** Roads connect the camps; they carve dirt tiles and keep spawns at bay. */
+/**
+ * Roads connect the camps; they carve dirt tiles and keep spawns at bay.
+ *
+ * An explicit link list rather than every pair: a road suppresses spawn nodes
+ * within 190px of itself, so a fully-connected map would quietly starve the
+ * regions it crosses. Each entry is a dog-leg, which reads better than a
+ * straight line drawn across half the world.
+ */
+const ROAD_LINKS: [string, string, number, number][] = [
+  ['hearthglen', 'rangers', 220, 90],
+  ['hearthglen', 'stonewatch', -240, 60],
+  ['rangers', 'stonewatch', 40, -300],
+  ['hearthglen', 'thornrest', -40, 170],
+  ['rangers', 'mirewatch', 190, 30],
+  ['rangers', 'rookrest', -300, -140],
+]
+
 const ROADS: [number, number, number, number][] = []
 function buildRoads() {
-  const [a, b, c] = CAMPS as [Camp, Camp, Camp]
-  // A gentle dog-leg reads better than a straight line across the map.
-  const leg = (p: Camp, q: Camp, bendX: number, bendY: number) => {
+  for (const [from, to, bendX, bendY] of ROAD_LINKS) {
+    const p = CAMPS.find((c) => c.id === from)
+    const q = CAMPS.find((c) => c.id === to)
+    if (!p || !q) continue
     const mx = (p.x + q.x) / 2 + bendX
     const my = (p.y + q.y) / 2 + bendY
     ROADS.push([p.x, p.y, mx, my], [mx, my, q.x, q.y])
   }
-  leg(a, b, 220, 90)
-  leg(a, c, -240, 60)
-  leg(b, c, 40, -300)
 }
 buildRoads()
 
@@ -301,6 +365,26 @@ export class World {
         if (elev > 0.52) return T.Rock
         return detail > 0.55 ? T.Gravel : T.Grass
       }
+      case 'downs':
+        // Open heath: cropped meadow over bare pasture, worn through to
+        // gravel where the herds have rooted it up.
+        if (detail > 0.62) return T.Meadow
+        if (patch > 0.68) return T.Dirt
+        return detail < 0.38 ? T.Gravel : T.Grass
+      case 'fen': {
+        // Standing water everywhere, but *shallow* water: the hollow has to be
+        // walkable, or half of it is unreachable and its dens never place.
+        const bog = fbm(tx * 0.075, ty * 0.075, 3, s + 613) * 0.7 + str * 0.3
+        if (bog > 0.63) return T.Shallow
+        if (bog > 0.57) return T.Sand
+        return detail < 0.42 ? T.Dirt : T.GrassLush
+      }
+      case 'crags': {
+        const elev = fbm(tx * 0.05, ty * 0.05, 4, s + 227) * 0.6 + str * 0.4
+        if (elev > 0.6) return T.Rock
+        if (elev > 0.46) return T.Gravel
+        return detail > 0.54 ? T.Dirt : T.Gravel
+      }
       default:
         if (detail > 0.66) return T.GrassLush
         if (detail < 0.33) return patch > 0.62 ? T.Dirt : T.Grass
@@ -378,6 +462,49 @@ export class World {
                       : pick < 0.94
                         ? 'rock'
                         : 'stump'
+            break
+          case 'downs':
+            density = 0.17
+            kind =
+              pick < 0.34
+                ? 'tuft'
+                : pick < 0.54
+                  ? 'bush'
+                  : pick < 0.7
+                    ? 'stump'
+                    : pick < 0.83
+                      ? 'rock'
+                      : pick < 0.93
+                        ? 'deadTree'
+                        : 'bones'
+            break
+          case 'fen':
+            density = 0.28
+            kind =
+              pick < 0.3
+                ? 'deadTree'
+                : pick < 0.5
+                  ? 'mushroom'
+                  : pick < 0.68
+                    ? 'bush'
+                    : pick < 0.84
+                      ? 'tuft'
+                      : pick < 0.94
+                        ? 'stump'
+                        : 'bones'
+            break
+          case 'crags':
+            density = 0.22
+            kind =
+              pick < 0.36
+                ? 'rock'
+                : pick < 0.6
+                  ? 'boulder'
+                  : pick < 0.78
+                    ? 'deadTree'
+                    : pick < 0.9
+                      ? 'bones'
+                      : 'tuft'
             break
           default:
             density = 0.1
@@ -469,9 +596,16 @@ export class World {
       const r = rng(region.x * 7919 + region.y * 104729)
       const placed: SpawnNode[] = []
       const want = region.nodes + region.eliteNodes
+      let elites = 0
+      let ordinary = 0
       let guard = 0
-      while (placed.length < want && guard++ < 3000) {
-        const elite = placed.length >= region.nodes
+      while (placed.length < want && guard++ < 6000) {
+        // Elites go down first, because they demand the most clearance from
+        // their neighbours. Placing them last meant a crowded region filled up
+        // on ordinary dens and then failed to fit a single elite — which is
+        // how Wolfden Thicket ended up with no alphas at all, and therefore no
+        // relics, while the offline ledger went on paying for them.
+        const elite = elites < region.eliteNodes
         const a = r() * Math.PI * 2
         // sqrt keeps nodes evenly spread rather than bunched at the centre
         const rad = Math.sqrt(r()) * region.radius * 0.86
@@ -498,8 +632,14 @@ export class World {
         }
         if (!clear) continue
 
-        const t = placed.length / Math.max(1, want - 1)
+        // Level spreads across the band within each kind of node, so an elite
+        // placed first is still the region's hardest rather than its easiest.
+        const rank = elite ? elites : ordinary
+        const span = elite ? region.eliteNodes : region.nodes
+        const t = span > 1 ? rank / (span - 1) : 0.5
         const level = Math.round(region.levelMin + (region.levelMax - region.levelMin) * t)
+        if (elite) elites++
+        else ordinary++
         placed.push({
           id: id++,
           region: region.id,

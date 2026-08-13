@@ -562,7 +562,7 @@ export class UI {
       if (!e.alive) continue
       const d = Math.hypot(e.x - g.player.x, e.y - g.player.y)
       if (d > 1500) continue
-      ctx.fillStyle = e.elite ? '#ff8a3c' : e.kind === 'bear' ? '#c96a4a' : '#d8483f'
+      ctx.fillStyle = e.elite ? '#ff8a3c' : ENEMIES[e.kind].mapColor
       const s = e.elite ? 3 : 2
       ctx.fillRect(Math.round(e.x * k) - 1, Math.round(e.y * k) - 1, s, s)
     }
@@ -793,7 +793,7 @@ export class UI {
       const rate = eligible
         ? killsPerHour(g.stats, r.kind, groundLevelOf(r), damageVs(g.mods, r.kind))
         : 0
-      const beast = r.kind === 'wolf' ? 'Wolves' : 'Bears'
+      const beast = ENEMIES[r.kind].plural
       const elites = r.eliteNodes > 0 ? ' and their elites' : ''
 
       const head = el('div', 'g-head')

@@ -317,9 +317,7 @@ export class Renderer {
   }
 
   private drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, ox: number, oy: number) {
-    const type = ENEMIES[e.kind]
-    const sheet = this.sheetByName(e.elite ? type.eliteSheet : type.sheet)
-    if (!sheet) return
+    const sheet = this.sheetOf(e)
     const sx = e.x - ox
     const sy = e.y - oy
 
@@ -327,12 +325,15 @@ export class Renderer {
     pixelDisc(ctx, sx, sy, e.radius * 1.15, e.radius * 0.42)
 
     if (e.elite) {
-      ctx.fillStyle = e.kind === 'wolf' ? 'rgba(255,106,61,0.18)' : 'rgba(255,138,60,0.18)'
+      ctx.fillStyle = 'rgba(255,138,60,0.18)'
       pixelDisc(ctx, sx, sy, e.radius * 1.7, e.radius * 0.7)
     }
 
+    // A boar pawing the ground holds the wind-up pose; the run itself is the
+    // walk cycle at speed, so the tell is unmistakable and the charge is not.
     let col: number
     if (e.state === 'attack') col = e.windup > 0.12 ? 4 : 5
+    else if (e.state === 'charge') col = e.windup > 0 ? 4 : Math.floor(e.anim) % 4
     else if (e.moving) col = Math.floor(e.anim) % 4
     else col = 0
 
@@ -488,8 +489,9 @@ export class Renderer {
       const hurt = e.hp < e.maxHp
       if (!engaged && !hurt && !e.elite) continue
       const sx = Math.round(e.x - ox)
-      const spriteH = e.kind === 'bear' ? 44 : 34
-      const sy = Math.round(e.y - oy - spriteH - 8)
+      // Read the height off the sheet rather than the species: five bodies at
+      // five scales, and a hard-coded pair put the bar through a rook's chest.
+      const sy = Math.round(e.y - oy - this.sheetOf(e).fh - 8)
       if (sx < -60 || sx > this.vw + 60 || sy < -20 || sy > this.vh + 20) continue
 
       const w = e.elite ? 40 : 30
@@ -521,7 +523,7 @@ export class Renderer {
     const t = g.enemyById(g.player.targetId)
     if (t && t.alive && g.player.auto) {
       const sx = Math.round(t.x - ox)
-      const sy = Math.round(t.y - oy - (t.kind === 'bear' ? 52 : 42))
+      const sy = Math.round(t.y - oy - this.sheetOf(t).fh - 8)
       ctx.fillStyle = '#f2c14e'
       ctx.fillRect(sx - 3, sy, 7, 2)
       ctx.fillRect(sx - 2, sy + 2, 5, 2)
@@ -548,21 +550,10 @@ export class Renderer {
 
   /* ---------------- helpers ---------------- */
 
-  private sheetByName(name: string): Sheet | null {
-    switch (name) {
-      case 'wolf':
-        return this.art.wolf
-      case 'alphaWolf':
-        return this.art.alphaWolf
-      case 'bear':
-        return this.art.bear
-      case 'elderBear':
-        return this.art.elderBear
-      case 'warrior':
-        return this.art.warrior
-      default:
-        return null
-    }
+  /** The sheet a beast is drawn from — elite or not. */
+  private sheetOf(e: Enemy): Sheet {
+    const type = ENEMIES[e.kind]
+    return this.art.beasts[e.elite ? type.eliteSheet : type.sheet]
   }
 
   private blitFrame(

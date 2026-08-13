@@ -47,7 +47,7 @@ export interface Item {
  * `Record<EnemyKind, ...>`, so adding a name here fails the build everywhere
  * that would otherwise have silently kept a two-species assumption.
  */
-export const ENEMY_KINDS = ['wolf', 'bear'] as const
+export const ENEMY_KINDS = ['wolf', 'bear', 'boar', 'spider', 'corvid'] as const
 
 export type EnemyKind = (typeof ENEMY_KINDS)[number]
 
@@ -60,7 +60,26 @@ export function perSpecies(value: number): BySpecies {
   return out
 }
 
-export type EnemyState = 'idle' | 'wander' | 'chase' | 'attack' | 'return' | 'dead'
+export type EnemyState =
+  | 'idle'
+  | 'wander'
+  | 'chase'
+  | 'attack'
+  | 'return'
+  | 'dead'
+  /** Boar: pawing the ground, then committed to a straight line. */
+  | 'charge'
+  /** Corvid: blown off the kill and re-forming a moment later. */
+  | 'scatter'
+
+/**
+ * States in which a beast is fighting the player and the de-aggro rule applies.
+ * A species trick is still a chase — forgetting one here is how a charging
+ * boar ends up following you across the map.
+ */
+export function isEngaged(state: EnemyState): boolean {
+  return state === 'chase' || state === 'attack' || state === 'charge' || state === 'scatter'
+}
 
 export interface Enemy {
   id: number
@@ -70,6 +89,11 @@ export interface Enemy {
   name: string
   x: number
   y: number
+  /**
+   * Unit heading, and only meaningful in `charge` and `scatter` — both commit
+   * to a direction chosen once and then stop steering, which is the whole
+   * point of them.
+   */
   vx: number
   vy: number
   radius: number
@@ -90,6 +114,8 @@ export interface Enemy {
   moving: boolean
   attackCd: number
   windup: number
+  /** Cooldown on this species' trick, kept apart from the melee swing. */
+  special: number
   hitFlash: number
   nodeId: number
   ax: number
@@ -131,6 +157,8 @@ export interface Player {
   auto: boolean
   targetId: number
   invuln: number
+  /** Seconds of spider webbing still dragging on your stride. */
+  webbed: number
 }
 
 export interface Ability {

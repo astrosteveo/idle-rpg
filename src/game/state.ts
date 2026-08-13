@@ -9,6 +9,7 @@
  */
 import { clamp, dist, facingToDir, rng, type Rng } from '../core/math'
 import {
+  BEHAVIOUR,
   CRIT_MULT,
   DESPERATE_BELOW,
   ELITE,
@@ -74,6 +75,7 @@ import {
 } from './world'
 import {
   SLOTS,
+  isEngaged,
   perSpecies,
   type Ability,
   type BySpecies,
@@ -220,6 +222,7 @@ export class Game {
       auto: false,
       targetId: -1,
       invuln: 0,
+      webbed: 0,
     }
     this.stats = this.recalc()
     this.player.hp = this.stats.maxHp
@@ -443,7 +446,8 @@ export class Game {
   /* ================= build-derived reach ================= */
 
   get moveSpeed(): number {
-    return PLAYER_SPEED * this.mods.moveSpeedMult
+    const webbed = this.player.webbed > 0 ? BEHAVIOUR.web.slowMult : 1
+    return PLAYER_SPEED * this.mods.moveSpeedMult * webbed
   }
 
   get swingRange(): number {
@@ -553,6 +557,7 @@ export class Game {
       moving: false,
       attackCd: 0,
       windup: 0,
+      special: 0,
       hitFlash: 0,
       nodeId: node.id,
       ax: x,
@@ -798,6 +803,10 @@ export class Game {
         color: this.mods.emberTrail ? '#ffb066' : '#cfe0ff',
       })
       if (this.mods.emberTrail) this.lightGround(p.x, p.y, radius * EMBER.radiusMult)
+      // Stormcrow Quill: a spin through a flock pays for most of the next one.
+      if (this.mods.wwRefundPerHit > 0 && hits > 0) {
+        ab.cd = Math.max(0, ab.cd - hits * this.mods.wwRefundPerHit)
+      }
       this.hooks.log(hits ? `Whirlwind hits ${hits}` : 'Whirlwind swings wide', '#cfe0ff')
     } else {
       ab.cd = ab.cooldown
@@ -866,7 +875,7 @@ export class Game {
       // Distant packs are frozen. Anything still mid-chase out there has
       // clearly lost the player, so send it straight home.
       if (d > 1500) {
-        if (e.state === 'chase' || e.state === 'attack' || e.state === 'return') {
+        if (isEngaged(e.state) || e.state === 'return') {
           e.x = e.ax
           e.y = e.ay
           e.hp = e.maxHp
@@ -900,8 +909,10 @@ export class Game {
 
   private stepEnemy(e: Enemy, dt: number, dPlayer: number) {
     const p = this.player
+    const type = ENEMIES[e.kind]
     e.stateT += dt
     e.attackCd = Math.max(0, e.attackCd - dt)
+    e.special = Math.max(0, e.special - dt)
     e.moving = false
 
     if (e.state === 'return') {
@@ -922,8 +933,9 @@ export class Game {
     }
 
     // --- aggro / de-aggro ---------------------------------------------
-    const engaged = e.state === 'chase' || e.state === 'attack'
-    if (engaged) {
+    // A species trick counts as engagement, so the de-aggro rule governs a
+    // charging boar and a scattering flock exactly as it governs a wolf.
+    if (isEngaged(e.state)) {
       if (this.shouldGiveUp(e, dPlayer)) {
         this.setEnemyState(e, 'return')
         this.pushFloat(e.x, e.y - 28, 'lost interest', '#8b93a5', 7)
@@ -971,7 +983,20 @@ export class Game {
         const reach = e.attackRange + p.radius
         if (dPlayer <= reach && e.attackCd <= 0) {
           this.setEnemyState(e, 'attack')
-          e.windup = ENEMIES[e.kind].windup
+          e.windup = type.windup
+          break
+        }
+        // A boar would rather run at you than walk to you, but only from far
+        // enough out that the wind-up is visible and the line is dodgeable.
+        if (
+          type.behaviour === 'charge' &&
+          e.special <= 0 &&
+          dPlayer > reach * 1.6 &&
+          dPlayer < BEHAVIOUR.charge.range
+        ) {
+          this.setEnemyState(e, 'charge')
+          e.windup = BEHAVIOUR.charge.windup
+          this.pushFloat(e.x, e.y - 30, '!', '#ffb066', 9)
           break
         }
         const a = Math.atan2(p.y - e.y, p.x - e.x)
@@ -993,11 +1018,62 @@ export class Game {
         if (e.windup <= 0) {
           const reach = e.attackRange + p.radius + 8
           if (dPlayer <= reach) this.damagePlayer(e)
-          e.attackCd = ENEMIES[e.kind].attackCd
+          e.attackCd = type.attackCd
           this.setEnemyState(e, 'chase')
         }
         break
       }
+
+      /**
+       * The boar's run. It tracks the player while pawing the ground and then
+       * stops steering entirely — a charge that homed in would be an attack
+       * with extra steps, where a committed line is something you can walk out
+       * of. It ends on contact, on a wall, or when it simply runs out.
+       */
+      case 'charge': {
+        if (e.windup > 0) {
+          e.windup -= dt
+          e.facing = Math.atan2(p.y - e.y, p.x - e.x)
+          e.anim += dt * 5
+          if (e.windup <= 0) {
+            e.vx = Math.cos(e.facing)
+            e.vy = Math.sin(e.facing)
+            e.stateT = 0
+          }
+          break
+        }
+        const speed = e.speed * BEHAVIOUR.charge.speedMult
+        const fromX = e.x
+        const fromY = e.y
+        this.moveEntity(e, e.vx * speed * dt, e.vy * speed * dt)
+        e.moving = true
+        e.anim += dt * 18
+        const travelled = dist(fromX, fromY, e.x, e.y)
+        const gap = dist(e.x, e.y, p.x, p.y)
+        if (p.alive && gap <= e.attackRange + p.radius) {
+          this.damagePlayer(e, BEHAVIOUR.charge.damageMult)
+          this.endCharge(e)
+        } else if (travelled < speed * dt * 0.5 || e.stateT > BEHAVIOUR.charge.seconds) {
+          // Ran into water, a shoulder of rock, or simply out of run.
+          this.endCharge(e)
+        }
+        break
+      }
+
+      /**
+       * Blown off the kill. Flies the heading it was given when the flock
+       * broke, then re-forms — the ordinary chase rules take it from there.
+       */
+      case 'scatter': {
+        const speed = e.speed * BEHAVIOUR.flock.speedMult
+        this.moveEntity(e, e.vx * speed * dt, e.vy * speed * dt)
+        e.facing = Math.atan2(e.vy, e.vx)
+        e.moving = true
+        e.anim += dt * 16
+        if (e.stateT > BEHAVIOUR.flock.seconds) this.setEnemyState(e, 'chase')
+        break
+      }
+
       default:
         break
     }
@@ -1038,6 +1114,35 @@ export class Game {
     e.stateT = 0
   }
 
+  /** Back to an ordinary chase, and no second run for a while. */
+  private endCharge(e: Enemy) {
+    e.special = BEHAVIOUR.charge.cooldown
+    e.attackCd = Math.max(e.attackCd, ENEMIES[e.kind].attackCd)
+    this.setEnemyState(e, 'chase')
+  }
+
+  /**
+   * One rook is hit and the whole unkindness leaves at once, each on its own
+   * heading away from the player, re-forming a second later. Scoped to the
+   * node so a flock is a flock rather than every bird on the crag.
+   */
+  private scatterFlock(hit: Enemy) {
+    const p = this.player
+    for (const e of this.enemies) {
+      if (!e.alive || e.kind !== hit.kind || e.nodeId !== hit.nodeId) continue
+      if (e.state === 'return' || e.state === 'scatter') continue
+      if (dist(e.x, e.y, hit.x, hit.y) > BEHAVIOUR.flock.radius) continue
+      const away = Math.atan2(e.y - p.y, e.x - p.x) + this.rand.range(-0.6, 0.6)
+      e.vx = Math.cos(away)
+      e.vy = Math.sin(away)
+      e.facing = away
+      // The cooldown is what keeps this a disruption rather than a kite: a
+      // rook that broke off on every blow could never be finished.
+      e.special = BEHAVIOUR.flock.cooldown
+      this.setEnemyState(e, 'scatter')
+    }
+  }
+
   /* ================= damage ================= */
 
   damageEnemy(e: Enemy, hit: { amount: number; crit: boolean }, source: 'hit' | 'burn' = 'hit') {
@@ -1068,15 +1173,33 @@ export class Game {
     }
     // Getting hit while wandering is a valid way to start a fight.
     if (e.state === 'idle' || e.state === 'wander') this.setEnemyState(e, 'chase')
-    if (e.hp <= 0) this.killEnemy(e)
+    if (e.hp <= 0) {
+      this.killEnemy(e)
+      return
+    }
+    // Survivors of a flock break off together. Done after the kill check so a
+    // dead rook does not take its neighbours with it, and only on a blow —
+    // burning ground ticks twice a second and would herd a flock forever.
+    if (source === 'hit' && ENEMIES[e.kind].behaviour === 'flock' && e.special <= 0) {
+      this.scatterFlock(e)
+    }
   }
 
-  private damagePlayer(e: Enemy) {
+  /**
+   * `mult` is the charge's extra weight — the one attack in the game that is
+   * worth more than the statline, because it costs the animal its wind-up and
+   * its ability to steer.
+   */
+  private damagePlayer(e: Enemy, mult = 1) {
     const p = this.player
     if (!p.alive || p.invuln > 0) return
-    const raw = e.dmg * this.rand.range(0.9, 1.12)
+    const raw = e.dmg * mult * this.rand.range(0.9, 1.12)
     const resist = resistFrom(this.mods, e.kind)
-    const amount = Math.max(1, Math.round(mitigate(raw, this.stats.armor, e.level) * resist))
+    let amount = Math.max(1, Math.round(mitigate(raw, this.stats.armor, e.level) * resist))
+    // A cap on the largest single blow. Default is the whole health bar, which
+    // is no cap at all, so nothing special-cases the absence of a relic.
+    amount = Math.min(amount, Math.max(1, Math.round(p.maxHp * this.mods.maxHitFraction)))
+    if (ENEMIES[e.kind].behaviour === 'web') this.applyWeb()
     p.hp -= amount
     p.hitFlash = 0.18
     this.outOfCombat = 0
@@ -1087,6 +1210,31 @@ export class Game {
       p.deadT = 0
       this.hooks.banner('You Fell', 'Returning to the nearest camp…')
       this.hooks.dirty()
+    }
+  }
+
+  /**
+   * Webbing. It does not stack in duration — a second bite refreshes it rather
+   * than accumulating, or a nest of spiders would pin a character in place
+   * permanently, which is a stun and not what this is.
+   */
+  private applyWeb() {
+    const p = this.player
+    if (this.mods.webproof) return
+    const fresh = p.webbed <= 0
+    p.webbed = BEHAVIOUR.web.seconds
+    if (fresh) {
+      this.pushFloat(p.x, p.y - 46, 'webbed', '#cfe6b0', 8)
+      this.effects.push({
+        kind: 'ring',
+        x: p.x,
+        y: p.y - 6,
+        t: 0,
+        life: 0.5,
+        angle: 0,
+        radius: 26,
+        color: '#cfe6b0',
+      })
     }
   }
 
@@ -1496,6 +1644,7 @@ export class Game {
     const p = this.player
     p.hitFlash = Math.max(0, p.hitFlash - dt)
     p.invuln = Math.max(0, p.invuln - dt)
+    p.webbed = Math.max(0, p.webbed - dt)
     this.outOfCombat += dt
     if (p.hp >= p.maxHp) return
     let rate = 0
@@ -1557,10 +1706,11 @@ export class Game {
     p.alive = true
     p.deadT = 0
     p.invuln = 2
+    p.webbed = 0
     p.targetId = -1
     this.roamTarget = null
     for (const e of this.enemies) {
-      if (e.state === 'chase' || e.state === 'attack') this.setEnemyState(e, 'return')
+      if (isEngaged(e.state)) this.setEnemyState(e, 'return')
     }
     this.hooks.log(`Recovered at ${camp.name}`, '#9ad0ff')
     this.hooks.dirty()

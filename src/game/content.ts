@@ -4,7 +4,7 @@
  * be changed without touching simulation code.
  */
 import { ENEMY_KINDS, perSpecies, type BySpecies, type EnemyKind, type ItemStats, type Slot } from './types'
-import type { IconKind } from '../render/sprites'
+import type { BeastSheetId, IconKind } from '../render/sprites'
 
 /* ------------------------------------------------------------------ *
  * Modifiers
@@ -52,10 +52,18 @@ export interface Mods {
    * chase end *sooner* and never later.
    */
   leashMult: number
+  /**
+   * Share of maximum health the largest single blow may take. 1 is no cap at
+   * all — a hit above your whole health bar was lethal anyway — so it composes
+   * multiplicatively without needing a "no cap" sentinel.
+   */
+  maxHitFraction: number
 
   /* Additive. */
   critAdd: number
   swingRangeAdd: number
+  /** Seconds off Whirlwind's cooldown for every beast it catches. */
+  wwRefundPerHit: number
   /** Fraction of maximum health restored on every kill. */
   lifeOnKill: number
   /** Damage per extra beast in whirlwind range, and the ceiling on that bonus. */
@@ -67,6 +75,8 @@ export interface Mods {
   /* Flags — any source turning one on turns it on. */
   emberTrail: boolean
   ambush: boolean
+  /** Spider webbing never lands. */
+  webproof: boolean
 }
 
 /**
@@ -94,14 +104,17 @@ export const NO_MODS: Readonly<Mods> = Object.freeze({
   vs: Object.freeze(perSpecies(1)),
   from: Object.freeze(perSpecies(1)),
   leashMult: 1,
+  maxHitFraction: 1,
   critAdd: 0,
   swingRangeAdd: 0,
+  wwRefundPerHit: 0,
   lifeOnKill: 0,
   frenzyPer: 0,
   frenzyCap: 0,
   breathOnKill: 0,
   emberTrail: false,
   ambush: false,
+  webproof: false,
 })
 
 /**
@@ -133,14 +146,17 @@ const COMBINE: Record<keyof Mods, 'mul' | 'add' | 'or' | 'mulEach'> = {
   vs: 'mulEach',
   from: 'mulEach',
   leashMult: 'mul',
+  maxHitFraction: 'mul',
   critAdd: 'add',
   swingRangeAdd: 'add',
+  wwRefundPerHit: 'add',
   lifeOnKill: 'add',
   frenzyPer: 'add',
   frenzyCap: 'add',
   breathOnKill: 'add',
   emberTrail: 'or',
   ambush: 'or',
+  webproof: 'or',
 }
 
 /**
@@ -249,14 +265,34 @@ export function mitigate(damage: number, armor: number, attackerLevel: number): 
  * Enemies
  * ------------------------------------------------------------------ */
 
+/**
+ * How a species fights, as opposed to how big its numbers are.
+ *
+ * `stalk` is the original animal: walk at the player, swing when in reach.
+ * The other three are the whole reason a third species is worth adding — a
+ * statline can only ever be a wolf with more health.
+ */
+export type Behaviour =
+  /** Wolves and bears: close the distance and bite. */
+  | 'stalk'
+  /** Boars: line up from range and commit to a straight, heavy run. */
+  | 'charge'
+  /** Spiders: every bite leaves webbing that drags on your stride. */
+  | 'web'
+  /** Corvids: the whole flock breaks off when one is hit, then re-forms. */
+  | 'flock'
+
 export interface EnemyType {
   id: EnemyKind
   name: string
   /** How the HUD counts them: "Wolves slain". */
   plural: string
   eliteName: string
-  sheet: 'wolf' | 'bear'
-  eliteSheet: 'alphaWolf' | 'elderBear'
+  sheet: BeastSheetId
+  eliteSheet: BeastSheetId
+  behaviour: Behaviour
+  /** Dot colour on the minimap. */
+  mapColor: string
   radius: number
   speed: number
   aggroRange: number
@@ -284,6 +320,8 @@ export const ENEMIES: Record<EnemyKind, EnemyType> = {
     eliteName: 'Alpha Wolf',
     sheet: 'wolf',
     eliteSheet: 'alphaWolf',
+    behaviour: 'stalk',
+    mapColor: '#d8483f',
     radius: 15,
     speed: 96,
     aggroRange: 210,
@@ -310,6 +348,8 @@ export const ENEMIES: Record<EnemyKind, EnemyType> = {
     eliteName: 'Elder Bear',
     sheet: 'bear',
     eliteSheet: 'elderBear',
+    behaviour: 'stalk',
+    mapColor: '#c96a4a',
     radius: 21,
     speed: 72,
     aggroRange: 175,
@@ -328,6 +368,131 @@ export const ENEMIES: Record<EnemyKind, EnemyType> = {
     habits:
       'Slow, short-sighted, and hits like a falling tree. One or two to a ' +
       'ground, so nothing rescues it — and nothing rescues you either.',
+  },
+  boar: {
+    id: 'boar',
+    name: 'Tusked Boar',
+    plural: 'Boars',
+    eliteName: 'Ironhide Tusker',
+    sheet: 'boar',
+    eliteSheet: 'ironhideBoar',
+    behaviour: 'charge',
+    mapColor: '#c98a3a',
+    radius: 18,
+    speed: 82,
+    aggroRange: 250,
+    leash: 600,
+    attackRange: 44,
+    attackCd: 1.45,
+    windup: 0.34,
+    hp: (l) => Math.round(58 + l * 18),
+    dmg: (l) => 7 + l * 2.2,
+    xp: (l) => Math.round(20 + l * 9),
+    gold: (l) => Math.round(6 + l * 3.4),
+    dropChance: 0.26,
+    lore:
+      'Thornfell was pasture once. The boars that root through it now are ' +
+      'descended from something that was fed, and they have not forgotten it.',
+    habits:
+      'Squares up at a distance, paws once, and then commits — a charge goes ' +
+      'where it was aimed and nowhere else. Step out of the line and it has to ' +
+      'turn around and start again.',
+  },
+  spider: {
+    id: 'spider',
+    name: 'Fen Spider',
+    plural: 'Spiders',
+    eliteName: 'Mirefen Broodmother',
+    sheet: 'spider',
+    eliteSheet: 'broodmother',
+    behaviour: 'web',
+    mapColor: '#6fbf7a',
+    radius: 16,
+    speed: 90,
+    aggroRange: 205,
+    leash: 540,
+    attackRange: 46,
+    attackCd: 1.3,
+    windup: 0.26,
+    hp: (l) => Math.round(66 + l * 20),
+    dmg: (l) => 8 + l * 2.5,
+    xp: (l) => Math.round(26 + l * 11),
+    gold: (l) => Math.round(7 + l * 4),
+    dropChance: 0.3,
+    lore:
+      'The hollow is strung wall to wall. Nothing that walks into Mirefen ' +
+      'walks out at the pace it went in.',
+    habits:
+      'Every bite leaves webbing, and webbing halves your stride for a few ' +
+      'seconds. Disengaging is the thing they take away from you — kill them ' +
+      'where they stand or do not start.',
+  },
+  corvid: {
+    id: 'corvid',
+    name: 'Carrion Rook',
+    plural: 'Rooks',
+    eliteName: 'Stormcrow',
+    sheet: 'corvid',
+    eliteSheet: 'stormcrow',
+    behaviour: 'flock',
+    mapColor: '#9aa6c8',
+    radius: 12,
+    speed: 126,
+    aggroRange: 235,
+    leash: 700,
+    attackRange: 36,
+    attackCd: 0.95,
+    windup: 0.2,
+    // Individually flimsy on purpose: the threat is the number of them and the
+    // fact that they will not hold still, not any one bird's health bar.
+    hp: (l) => Math.round(40 + l * 11),
+    dmg: (l) => 6 + l * 2,
+    xp: (l) => Math.round(18 + l * 7),
+    gold: (l) => Math.round(4 + l * 2.6),
+    dropChance: 0.18,
+    lore:
+      'They hold the crag in numbers nobody has ever finished counting, and ' +
+      'they were there before the watch was.',
+    habits:
+      'Hit one and the whole unkindness breaks off at once — then re-forms a ' +
+      'second later from a different side. Whirlwind catches a flock mid-' +
+      'gather; single blows mostly catch air.',
+  },
+}
+
+/**
+ * The three species tricks, in one place.
+ *
+ * Each is deliberately answerable. A charge is telegraphed and cannot steer, so
+ * it is dodged by moving; webbing is short, so it is survived by killing what
+ * applied it; a scatter is brief, so it is beaten by an ability with an area
+ * rather than by chasing individual birds.
+ */
+export const BEHAVIOUR = {
+  charge: {
+    /** Furthest the boar will start a run from. */
+    range: 340,
+    /** Pawing the ground — the whole tell, and it must stay readable. */
+    windup: 0.6,
+    speedMult: 3.1,
+    /** How long the run lasts before it blows out. */
+    seconds: 1.15,
+    damageMult: 1.7,
+    /** Seconds before it can line up another. */
+    cooldown: 5,
+  },
+  web: {
+    seconds: 1.8,
+    /** Stride multiplier while webbed. */
+    slowMult: 0.45,
+  },
+  flock: {
+    seconds: 0.85,
+    speedMult: 1.9,
+    /** How far the panic carries through the flock. */
+    radius: 190,
+    /** Per bird, so a flock cannot be broken off on every single blow. */
+    cooldown: 3.2,
   },
 }
 
@@ -409,7 +574,7 @@ export function xpScale(playerLevel: number, enemyLevel: number): number {
  * than cast to one: a species missing from here should fail the build, not
  * quietly settle a night's hunting at `undefined` kills an hour.
  */
-const CLEAVE: BySpecies = { wolf: 1.45, bear: 1.1 }
+const CLEAVE: BySpecies = { wolf: 1.45, bear: 1.1, boar: 1.15, spider: 1.25, corvid: 1.7 }
 
 /**
  * The ledger is a closed-form rate model, not a headless simulation — it has to
@@ -566,9 +731,57 @@ export const QUESTS: QuestDef[] = [
     id: 'q7',
     name: 'The Long Hunt',
     giver: 'Wildmarch',
-    desc: 'The march never truly ends. Keep culling whatever prowls these lands.',
+    desc: 'The ridge is held. Cull whatever still prowls, and the march moves on.',
     objective: { type: 'kill', kind: 'any', count: 60 },
     reward: { xp: 1500, gold: 900, item: { base: 'cuirass', rarity: 4, ilvl: 15 } },
+  },
+  {
+    id: 'q8',
+    name: 'South of the Old Pasture',
+    giver: 'Hearthglen Camp',
+    desc: 'There is a camp on the Thornfell road that has stopped sending word. Find it.',
+    objective: { type: 'reach', camp: 'thornrest' },
+    reward: { xp: 700, gold: 380, item: { base: 'gauntlets', rarity: 3, ilvl: 11 } },
+  },
+  {
+    id: 'q9',
+    name: 'Tusk and Thorn',
+    giver: 'Thornrest',
+    desc: 'The boars have the Downs. They will not be moved politely.',
+    objective: { type: 'kill', kind: 'boar', count: 14 },
+    reward: { xp: 1100, gold: 560, item: { base: 'maul', rarity: 3, ilvl: 12 } },
+  },
+  {
+    id: 'q10',
+    name: 'Into the Mire',
+    giver: 'Thornrest',
+    desc: 'East of the water there is a watchpost nobody has walked out of lately.',
+    objective: { type: 'reach', camp: 'mirewatch' },
+    reward: { xp: 1400, gold: 700, item: { base: 'sabatons', rarity: 3, ilvl: 14 } },
+  },
+  {
+    id: 'q11',
+    name: 'Cut the Weave',
+    giver: 'Mirewatch',
+    desc: 'Mirefen is strung wall to wall. Thin the weavers.',
+    objective: { type: 'kill', kind: 'spider', count: 16 },
+    reward: { xp: 2100, gold: 1000, item: { base: 'sword', rarity: 4, ilvl: 16 } },
+  },
+  {
+    id: 'q12',
+    name: 'The Crag Road',
+    giver: 'Mirewatch',
+    desc: 'North, above everything, there is a rest cut into the rock. Reach it.',
+    objective: { type: 'reach', camp: 'rookrest' },
+    reward: { xp: 2600, gold: 1200, item: { base: 'helm', rarity: 4, ilvl: 17 } },
+  },
+  {
+    id: 'q13',
+    name: 'An Unkindness',
+    giver: 'Rookrest',
+    desc: 'The rooks hold Ravencrag in numbers nobody has finished counting. Start counting.',
+    objective: { type: 'kill', kind: 'corvid', count: 30 },
+    reward: { xp: 3400, gold: 1600, item: { base: 'band', rarity: 4, ilvl: 19 } },
   },
 ]
 
@@ -686,6 +899,46 @@ export const MILESTONES: MilestoneDef[] = [
     metric: 'quests',
     threshold: 4,
     reward: { xp: 500, gold: 350, item: { base: 'gauntlets', rarity: 3, ilvl: 12 } },
+  },
+  {
+    id: 'm-boar-60',
+    name: 'Thornfell Butcher',
+    desc: 'Slay 60 boars',
+    metric: 'slain:boar',
+    threshold: 60,
+    reward: { xp: 1600, gold: 900, item: { base: 'cuirass', rarity: 3, ilvl: 14 } },
+  },
+  {
+    id: 'm-spider-50',
+    name: 'Weave Cutter',
+    desc: 'Slay 50 spiders',
+    metric: 'slain:spider',
+    threshold: 50,
+    reward: { xp: 2400, gold: 1300, item: { base: 'sabatons', rarity: 4, ilvl: 16 } },
+  },
+  {
+    id: 'm-corvid-120',
+    name: 'Scarecrow',
+    desc: 'Slay 120 rooks',
+    metric: 'slain:corvid',
+    threshold: 120,
+    reward: { xp: 3600, gold: 2000, item: { base: 'axe', rarity: 4, ilvl: 19 } },
+  },
+  {
+    id: 'm-kill-500',
+    name: 'The Long March',
+    desc: 'Slay 500 beasts',
+    metric: 'kills',
+    threshold: 500,
+    reward: { xp: 4800, gold: 3200, item: { base: 'sword', rarity: 4, ilvl: 20 } },
+  },
+  {
+    id: 'm-level-15',
+    name: 'Weathered',
+    desc: 'Reach level 15',
+    metric: 'level',
+    threshold: 15,
+    reward: { xp: 0, gold: 1600, item: { base: 'maul', rarity: 4, ilvl: 18 } },
   },
 ]
 
@@ -982,6 +1235,39 @@ export const UNIQUES: UniqueDef[] = [
     flavour: 'The march does not stop to let you breathe. These do.',
     mods: { breathOnKill: 3 },
     from: 'bear',
+  },
+  {
+    id: 'ironhide-bulwark',
+    name: 'Ironhide Bulwark',
+    slot: 'chest',
+    icon: 'chest',
+    armor: 0.7,
+    rule: 'No single blow may take more than 18% of your health.',
+    flavour: 'Cut from something that spent its whole life running at things.',
+    mods: { maxHitFraction: 0.18 },
+    from: 'boar',
+  },
+  {
+    id: 'widows-weave',
+    name: "Widow's Weave",
+    slot: 'feet',
+    icon: 'boots',
+    armor: 0.4,
+    rule: 'Webbing never slows you.',
+    flavour: 'Woven from the thing that wove it. It remembers being on the other side.',
+    mods: { webproof: true, moveSpeedMult: 1.06 },
+    from: 'spider',
+  },
+  {
+    id: 'stormcrow-quill',
+    name: 'Stormcrow Quill',
+    slot: 'head',
+    icon: 'helm',
+    armor: 0.45,
+    rule: 'Whirlwind returns 1 second of its own cooldown for every beast it catches.',
+    flavour: 'Picked up off the crag. It was not moulted.',
+    mods: { wwRefundPerHit: 1 },
+    from: 'corvid',
   },
 ]
 
