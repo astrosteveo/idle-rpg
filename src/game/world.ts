@@ -68,6 +68,26 @@ export interface Camp {
   startDiscovered: boolean
 }
 
+/**
+ * A named place inside a region. Regions have names; until now nothing inside
+ * them did, which is what makes a map a set of coloured blobs rather than
+ * somewhere you can give someone directions to.
+ *
+ * Placement data only, exactly like `Camp` — which of these a character has
+ * stood in is per-player progress and lives on `Game.seenLandmarks`.
+ */
+export interface Landmark {
+  id: string
+  name: string
+  x: number
+  y: number
+  radius: number
+  /** Decides what is built here, and the line the log greets it with. */
+  kind: 'cairn' | 'ruin' | 'grove' | 'crossing' | 'roost'
+  /** One-line description, shown on arrival. */
+  blurb: string
+}
+
 export interface SpawnNode {
   id: number
   region: BiomeId
@@ -216,6 +236,78 @@ export const CAMPS: Camp[] = [
 ]
 
 /**
+ * Seven named places, one to a region plus a crossroads in the open. They are
+ * deliberately not quest targets or reward sites — a landmark earns its keep by
+ * being somewhere you can name, which is what turns "the north-west bit" into
+ * "the Wind Altar".
+ */
+export const LANDMARKS: Landmark[] = [
+  {
+    id: 'standing-stone',
+    name: 'The Standing Stone',
+    x: 2760,
+    y: 3180,
+    radius: 165,
+    kind: 'cairn',
+    blurb: 'Older than the camp, and nobody at the camp will say who raised it.',
+  },
+  {
+    id: 'hollow-oak',
+    name: 'The Hollow Oak',
+    x: 3300,
+    y: 1450,
+    radius: 175,
+    kind: 'grove',
+    blurb: 'Struck once, a long time ago, and still holding the whole clearing open.',
+  },
+  {
+    id: 'wind-altar',
+    name: 'The Wind Altar',
+    x: 1100,
+    y: 1300,
+    radius: 170,
+    kind: 'ruin',
+    blurb: 'Three walls of a hall the ridge has been taking back for a century.',
+  },
+  {
+    id: 'bonefield',
+    name: 'The Bonefield',
+    x: 1060,
+    y: 3600,
+    radius: 175,
+    kind: 'cairn',
+    blurb: 'Something was driven through here in numbers, and it did not get out.',
+  },
+  {
+    id: 'drowned-chapel',
+    name: 'The Drowned Chapel',
+    x: 3900,
+    y: 3350,
+    radius: 170,
+    kind: 'ruin',
+    blurb: 'It stood on dry ground once. The hollow disagreed.',
+  },
+  {
+    id: 'rookstone',
+    name: 'The Rookstone',
+    x: 2620,
+    y: 950,
+    radius: 160,
+    kind: 'roost',
+    blurb: 'Every bird on the crag can see it, and every bird on the crag watches it.',
+  },
+  {
+    id: 'crowfoot',
+    name: 'Crowfoot Crossing',
+    x: 2620,
+    y: 2960,
+    radius: 150,
+    kind: 'crossing',
+    blurb: 'Where the Hearthglen road forks. Everyone passes it; nobody stops.',
+  },
+]
+
+/**
  * Roads connect the camps; they carve dirt tiles and keep spawns at bay.
  *
  * An explicit link list rather than every pair: a road suppresses spawn nodes
@@ -287,6 +379,13 @@ export class World {
   campAt(wx: number, wy: number): Camp | null {
     for (const c of CAMPS) {
       if (dist2(wx, wy, c.x, c.y) < c.radius * c.radius) return c
+    }
+    return null
+  }
+
+  landmarkAt(wx: number, wy: number): Landmark | null {
+    for (const l of LANDMARKS) {
+      if (dist2(wx, wy, l.x, l.y) < l.radius * l.radius) return l
     }
     return null
   }
@@ -526,6 +625,61 @@ export class World {
       }
     }
     this.decorateCamps()
+    this.decorateLandmarks()
+  }
+
+  /**
+   * What actually makes a landmark a landmark: something built or piled at the
+   * spot, so it reads from across the field rather than only in the HUD. Each
+   * arrangement is seeded from the landmark's own position, so the same place
+   * is the same shape for everybody.
+   */
+  private decorateLandmarks() {
+    for (const l of LANDMARKS) {
+      const r = rng(Math.round(l.x) * 131 + Math.round(l.y) * 17)
+      const ring = (n: number, kind: string, rad: number, jitter = 0.5) => {
+        for (let i = 0; i < n; i++) {
+          const a = (i / n) * Math.PI * 2 + r() * jitter
+          this.addProp({
+            x: l.x + Math.cos(a) * rad * (0.8 + r() * 0.4),
+            y: l.y + Math.sin(a) * rad * 0.8 * (0.8 + r() * 0.4),
+            kind,
+            variant: Math.floor(r() * 3),
+          })
+        }
+      }
+      switch (l.kind) {
+        case 'cairn':
+          this.addProp({ x: l.x, y: l.y, kind: 'cairn', variant: 0 })
+          ring(5, 'rock', l.radius * 0.55)
+          ring(3, 'bones', l.radius * 0.34)
+          break
+        case 'ruin':
+          for (let i = 0; i < 4; i++) {
+            this.addProp({ x: l.x - 54 + i * 36, y: l.y - 30, kind: 'pillar', variant: i % 3 })
+          }
+          this.addProp({ x: l.x - 60, y: l.y + 34, kind: 'pillar', variant: 1 })
+          this.addProp({ x: l.x + 62, y: l.y + 30, kind: 'pillar', variant: 2 })
+          ring(4, 'boulder', l.radius * 0.6)
+          break
+        case 'grove':
+          this.addProp({ x: l.x, y: l.y, kind: 'deadTree', variant: 0 })
+          ring(6, 'oak', l.radius * 0.68)
+          ring(5, 'mushroom', l.radius * 0.3)
+          break
+        case 'roost':
+          this.addProp({ x: l.x, y: l.y, kind: 'cairn', variant: 0 })
+          ring(5, 'deadTree', l.radius * 0.6)
+          ring(4, 'bones', l.radius * 0.35)
+          break
+        case 'crossing':
+          this.addProp({ x: l.x, y: l.y - 8, kind: 'signpost', variant: 0 })
+          this.addProp({ x: l.x - 30, y: l.y + 16, kind: 'crate', variant: 0 })
+          this.addProp({ x: l.x + 26, y: l.y + 22, kind: 'banner', variant: 0 })
+          ring(4, 'stake', l.radius * 0.5)
+          break
+      }
+    }
   }
 
   private decorateCamps() {

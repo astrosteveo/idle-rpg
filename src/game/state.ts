@@ -70,6 +70,7 @@ import {
   groundLevelOf,
   type BiomeId,
   type Camp,
+  type Landmark,
   type Region,
   type SpawnNode,
 } from './world'
@@ -171,6 +172,8 @@ export class Game {
   claimed = new Set<string>()
   /** Camps this character has found. Per-player progress, never world state. */
   discovered = new Set<string>(CAMPS.filter((c) => c.startDiscovered).map((c) => c.id))
+  /** Named places this character has stood in. Also per-player, also never world. */
+  seenLandmarks = new Set<string>()
   autoEquip = true
   /** Where this character hunts while its player is away. */
   huntingGround: BiomeId | null = null
@@ -182,6 +185,8 @@ export class Game {
   groundPinned = false
   time = 0
   currentCamp: Camp | null = null
+  /** The named place the player is standing in, if any. Drives the HUD label. */
+  currentLandmark: Landmark | null = null
   hooks: GameHooks = { log: () => {}, banner: () => {}, dirty: () => {} }
 
   private rand: Rng = rng(0xc0ffee)
@@ -259,6 +264,7 @@ export class Game {
       questProgress: this.questProgress,
       claimed: [...this.claimed],
       discovered: [...this.discovered],
+      seenLandmarks: [...this.seenLandmarks],
       huntingGround: this.huntingGround,
       groundPinned: this.groundPinned,
       autoEquip: this.autoEquip,
@@ -297,6 +303,7 @@ export class Game {
     this.questProgress = s.questProgress
     this.claimed = new Set(s.claimed)
     this.discovered = new Set(s.discovered)
+    this.seenLandmarks = new Set(s.seenLandmarks)
     this.huntingGround = s.huntingGround
     this.groundPinned = s.groundPinned ?? false
     this.autoEquip = s.autoEquip
@@ -592,6 +599,10 @@ export class Game {
 
     this.currentCamp = this.world.campAt(p.x, p.y)
     if (this.currentCamp && !this.isDiscovered(this.currentCamp)) this.discoverCamp(this.currentCamp)
+    this.currentLandmark = this.world.landmarkAt(p.x, p.y)
+    if (this.currentLandmark && !this.seenLandmarks.has(this.currentLandmark.id)) {
+      this.findLandmark(this.currentLandmark)
+    }
     this.trackGround()
 
     if (p.auto) this.stepAuto(dt)
@@ -1560,6 +1571,18 @@ export class Game {
 
   isDiscovered(camp: Camp): boolean {
     return this.discovered.has(camp.id)
+  }
+
+  /**
+   * A landmark grants nothing. It is worth marking anyway — the whole value of
+   * a named place is that you can tell someone else about it, and a place you
+   * walked past without noticing has no name to tell.
+   */
+  private findLandmark(l: Landmark) {
+    this.seenLandmarks.add(l.id)
+    this.hooks.banner(l.name, this.world.regionAt(l.x, l.y).name)
+    this.hooks.log(`${l.name} — ${l.blurb}`, '#cbb489')
+    this.hooks.dirty()
   }
 
   private discoverCamp(camp: Camp) {

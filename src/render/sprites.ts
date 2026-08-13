@@ -1536,6 +1536,39 @@ function stake(): Prop {
   })
 }
 
+/** Stacked stones, widest at the base — the mark of a named place. */
+function cairn(): Prop {
+  return prop(26, 34, (c) => {
+    c.oval(13, 31, 11, 4, '#4a4f5c')
+    c.oval(13, 28, 10, 5, '#5a6070')
+    c.oval(12, 27, 7, 3, '#767d8f')
+    c.oval(13, 22, 8, 4.5, '#5a6070')
+    c.oval(12, 21, 5, 2.5, '#767d8f')
+    c.oval(13, 16, 6, 4, '#545a68')
+    c.oval(12, 15, 4, 2, '#6e7587')
+    c.oval(13, 10, 4.5, 3.5, '#5a6070')
+    c.oval(13, 5, 3, 3, '#767d8f')
+    c.dot(12, 4, '#8e96a8')
+  })
+}
+
+/** A broken column. Three variants so a ruin is not a row of identical stubs. */
+function pillar(height: number): Prop {
+  return prop(18, height + 8, (c) => {
+    const top = 8
+    c.oval(9, height + 5, 8, 3.5, '#4c4a44')
+    c.px(4, top, 10, height - 2, '#7d7a6e')
+    c.px(4, top, 3, height - 2, '#98957f')
+    c.px(11, top, 3, height - 2, '#5e5c52')
+    // Fluting, and a broken crown that is never level.
+    c.px(7, top, 1, height - 2, '#5e5c52')
+    c.px(3, height + 1, 12, 4, '#8b8875')
+    c.px(3, height + 4, 12, 2, '#5e5c52')
+    c.px(4, top, 10, 2, '#5e5c52')
+    c.px(4 + (height % 3), top - 2, 4, 3, '#8b8875')
+  })
+}
+
 function signpost(): Prop {
   return prop(22, 26, (c) => {
     c.px(10, 8, 3, 17, '#5d3f24')
@@ -1567,6 +1600,8 @@ export function makeProps(): Record<string, Prop[]> {
     crate: [crate()],
     signpost: [signpost()],
     stake: [stake()],
+    cairn: [cairn()],
+    pillar: [pillar(26), pillar(19), pillar(31)],
   }
 }
 

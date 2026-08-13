@@ -218,6 +218,14 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The region a named place sits in, demoted under its name. */
+#zonename small {
+  display: block;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin-top: 1px;
+}
 #minimap {
   display: block;
   width: 164px;

@@ -15,7 +15,7 @@ import type { Counters } from './state'
 import { ENEMY_KINDS, perSpecies, type Item, type Slot } from './types'
 import type { BiomeId } from './world'
 
-export const SAVE_VERSION = 3
+export const SAVE_VERSION = 4
 export const SAVE_KEY = 'wildmarch.save'
 
 export interface SavedPlayer {
@@ -32,7 +32,7 @@ export interface SavedPlayer {
   auto: boolean
 }
 
-export interface SaveV3 {
+export interface SaveV4 {
   v: number
   /** Saves are tied to the world they were made in. */
   seed: number
@@ -48,6 +48,8 @@ export interface SaveV3 {
   questProgress: number
   claimed: string[]
   discovered: string[]
+  /** Named places this character has stood in. Grants nothing; remembers. */
+  seenLandmarks: string[]
   huntingGround: BiomeId | null
   /** Whether the ground was chosen deliberately or is still following the player. */
   groundPinned: boolean
@@ -63,7 +65,7 @@ export interface SaveV3 {
 }
 
 /** The schema at the current version. Everything outside this file uses it. */
-export type Save = SaveV3
+export type Save = SaveV4
 
 /**
  * Structural check plus a forward migration, in one pass, because callers only
@@ -89,12 +91,16 @@ export function readSave(x: unknown, expectSeed: number): Save | null {
   // keeps its level and simply arrives with its picks unspent.
   const talents = Array.isArray(s.talents) ? s.talents.filter(isId) : []
   const foundUniques = Array.isArray(s.foundUniques) ? s.foundUniques.filter(isId) : []
+  // v3 → v4: named landmarks did not exist. An existing character has simply
+  // never noticed any of them, and finds them the next time it walks past.
+  const seenLandmarks = Array.isArray(s.seenLandmarks) ? s.seenLandmarks.filter(isId) : []
 
   return {
     ...(s as Save),
     v: SAVE_VERSION,
     talents,
     foundUniques,
+    seenLandmarks,
     counters: readCounters(s.counters),
   }
 }

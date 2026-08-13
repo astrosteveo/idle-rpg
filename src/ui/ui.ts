@@ -22,7 +22,7 @@ import { itemScore, rarityName, statLines, uniqueDefOf } from '../game/loot'
 import type { Game } from '../game/state'
 import { ENEMY_KINDS, SLOTS, SLOT_LABEL, type EnemyKind, type Item } from '../game/types'
 import type { QuestObjective } from '../game/content'
-import { CAMPS, MAP_TILES, REGIONS, WORLD_SIZE, groundLevelOf } from '../game/world'
+import { CAMPS, LANDMARKS, MAP_TILES, REGIONS, WORLD_SIZE, groundLevelOf } from '../game/world'
 import { killsPerHour, type OfflineReport } from '../game/offline'
 import { OFFLINE } from '../game/content'
 import type { Renderer } from '../render/renderer'
@@ -456,9 +456,13 @@ export class UI {
       `<span>SPD <b>${(1 / s.attackInterval).toFixed(2)}/s</b></span>`
     this.goldLabel.textContent = `${p.gold.toLocaleString()} gold`
 
+    // A named place wins the headline and demotes its region to the subtitle:
+    // "The Wind Altar" is the useful half of "somewhere on Stonewatch Ridge".
     const camp = g.currentCamp
     const region = g.world.regionAt(p.x, p.y)
-    this.zoneLabel.textContent = camp ? camp.name : region.name
+    const here = camp?.name ?? g.currentLandmark?.name
+    const label = here ? `${here}<small>${region.name}</small>` : region.name
+    if (this.zoneLabel.innerHTML !== label) this.zoneLabel.innerHTML = label
 
     for (let i = 0; i < this.abilityEls.length; i++) {
       const ab = g.abilities[i]!
@@ -565,6 +569,17 @@ export class UI {
       ctx.fillStyle = e.elite ? '#ff8a3c' : ENEMIES[e.kind].mapColor
       const s = e.elite ? 3 : 2
       ctx.fillRect(Math.round(e.x * k) - 1, Math.round(e.y * k) - 1, s, s)
+    }
+
+    // Landmarks under the camps: smaller, and only once found, so the map
+    // fills in as the character learns the country rather than arriving solved.
+    for (const l of LANDMARKS) {
+      if (!g.seenLandmarks.has(l.id)) continue
+      const lx = Math.round(l.x * k)
+      const ly = Math.round(l.y * k)
+      ctx.fillStyle = '#cbb489'
+      ctx.fillRect(lx - 1, ly - 3, 2, 6)
+      ctx.fillRect(lx - 3, ly - 1, 6, 2)
     }
 
     for (const c of CAMPS) {
