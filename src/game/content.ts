@@ -7,6 +7,158 @@ import type { EnemyKind, ItemStats, Slot } from './types'
 import type { IconKind } from '../render/sprites'
 
 /* ------------------------------------------------------------------ *
+ * Modifiers
+ * ------------------------------------------------------------------ */
+
+/**
+ * One flat bag of numbers that talents, uniques and beast mastery all
+ * contribute to, so the simulation asks a single object what the rules are
+ * instead of interrogating three systems at every damage roll.
+ *
+ * `COMBINE` below declares how each field stacks, and it is a `Record` over
+ * every key of `Mods` — a field added here without a stacking rule fails the
+ * build rather than silently defaulting to something wrong.
+ */
+export interface Mods {
+  /* Multiplicative. Two +10% sources make +21%, never +20%. */
+  damageMult: number
+  attackSpeedMult: number
+  maxHpMult: number
+  moveSpeedMult: number
+  /** Out-of-combat health regeneration. */
+  regenMult: number
+  goldMult: number
+  dropChanceMult: number
+  wwRadiusMult: number
+  wwDamageMult: number
+  wwCooldownMult: number
+  swHealMult: number
+  swCooldownMult: number
+  swingArcMult: number
+  /** Against a beast already below `EXECUTE_BELOW` of its health. */
+  executeMult: number
+  /** Against a beast that has not been wounded yet. */
+  openerMult: number
+  /** Damage dealt to each species, and damage taken from it. */
+  vsWolf: number
+  vsBear: number
+  fromWolf: number
+  fromBear: number
+  /**
+   * Scales every distance in `Game.shouldGiveUp`. Only ever set below 1: the
+   * de-aggro rule is what keeps the map traversable, so content may make a
+   * chase end *sooner* and never later.
+   */
+  leashMult: number
+
+  /* Additive. */
+  critAdd: number
+  swingRangeAdd: number
+  /** Fraction of maximum health restored on every kill. */
+  lifeOnKill: number
+  /** Damage per extra beast in whirlwind range, and the ceiling on that bonus. */
+  frenzyPer: number
+  frenzyCap: number
+  /** Seconds of Second Wind returned on every kill. */
+  breathOnKill: number
+
+  /* Flags — any source turning one on turns it on. */
+  emberTrail: boolean
+  ambush: boolean
+}
+
+/**
+ * The identity element. Frozen because it is module scope: a `Mods` that
+ * anything could write to would be one character's build leaking into
+ * everyone's the moment the world is shared.
+ */
+export const NO_MODS: Readonly<Mods> = Object.freeze({
+  damageMult: 1,
+  attackSpeedMult: 1,
+  maxHpMult: 1,
+  moveSpeedMult: 1,
+  regenMult: 1,
+  goldMult: 1,
+  dropChanceMult: 1,
+  wwRadiusMult: 1,
+  wwDamageMult: 1,
+  wwCooldownMult: 1,
+  swHealMult: 1,
+  swCooldownMult: 1,
+  swingArcMult: 1,
+  executeMult: 1,
+  openerMult: 1,
+  vsWolf: 1,
+  vsBear: 1,
+  fromWolf: 1,
+  fromBear: 1,
+  leashMult: 1,
+  critAdd: 0,
+  swingRangeAdd: 0,
+  lifeOnKill: 0,
+  frenzyPer: 0,
+  frenzyCap: 0,
+  breathOnKill: 0,
+  emberTrail: false,
+  ambush: false,
+})
+
+const COMBINE: Record<keyof Mods, 'mul' | 'add' | 'or'> = {
+  damageMult: 'mul',
+  attackSpeedMult: 'mul',
+  maxHpMult: 'mul',
+  moveSpeedMult: 'mul',
+  regenMult: 'mul',
+  goldMult: 'mul',
+  dropChanceMult: 'mul',
+  wwRadiusMult: 'mul',
+  wwDamageMult: 'mul',
+  wwCooldownMult: 'mul',
+  swHealMult: 'mul',
+  swCooldownMult: 'mul',
+  swingArcMult: 'mul',
+  executeMult: 'mul',
+  openerMult: 'mul',
+  vsWolf: 'mul',
+  vsBear: 'mul',
+  fromWolf: 'mul',
+  fromBear: 'mul',
+  leashMult: 'mul',
+  critAdd: 'add',
+  swingRangeAdd: 'add',
+  lifeOnKill: 'add',
+  frenzyPer: 'add',
+  frenzyCap: 'add',
+  breathOnKill: 'add',
+  emberTrail: 'or',
+  ambush: 'or',
+}
+
+/** Fresh, writable copy of the identity. */
+export function baseMods(): Mods {
+  return { ...NO_MODS }
+}
+
+/** Folds one contribution into an accumulator, in place. */
+export function mergeMods(into: Mods, add: Partial<Mods>): Mods {
+  const acc = into as unknown as Record<string, number | boolean>
+  for (const [key, value] of Object.entries(add)) {
+    if (value === undefined) continue
+    const rule = COMBINE[key as keyof Mods]
+    if (rule === 'or') acc[key] = (acc[key] as boolean) || (value as boolean)
+    else if (rule === 'mul') acc[key] = (acc[key] as number) * (value as number)
+    else acc[key] = (acc[key] as number) + (value as number)
+  }
+  return into
+}
+
+/** A beast at or below this share of its health counts as executable. */
+export const EXECUTE_BELOW = 0.3
+
+/** Below this share of *your* health, Second Wind's refund becomes total. */
+export const DESPERATE_BELOW = 0.25
+
+/* ------------------------------------------------------------------ *
  * Player
  * ------------------------------------------------------------------ */
 
@@ -37,6 +189,7 @@ export function deriveStats(
   level: number,
   base: { str: number; vit: number; agi: number },
   gear: ItemStats,
+  mods: Readonly<Mods> = NO_MODS,
 ): DerivedStats {
   const str = base.str + (gear.str ?? 0)
   const vit = base.vit + (gear.vit ?? 0)
@@ -45,11 +198,11 @@ export function deriveStats(
     str,
     vit,
     agi,
-    maxHp: Math.round(72 + vit * 11 + level * 7),
-    damage: 5 + str * 1.75 + (gear.dmg ?? 0),
+    maxHp: Math.round((72 + vit * 11 + level * 7) * mods.maxHpMult),
+    damage: (5 + str * 1.75 + (gear.dmg ?? 0)) * mods.damageMult,
     armor: gear.armor ?? 0,
-    attackInterval: Math.max(0.36, 0.98 - agi * 0.013),
-    crit: Math.min(0.55, 0.05 + agi * 0.007),
+    attackInterval: Math.max(0.3, (0.98 - agi * 0.013) / mods.attackSpeedMult),
+    crit: Math.min(0.7, 0.05 + agi * 0.007 + mods.critAdd),
   }
 }
 
@@ -84,6 +237,10 @@ export interface EnemyType {
   gold: (l: number) => number
   /** Chance an ordinary kill drops an equipment item. */
   dropChance: number
+  /** Bestiary entry — read once, and only there. */
+  lore: string
+  /** Bestiary entry — how the thing actually fights. */
+  habits: string
 }
 
 export const ENEMIES: Record<EnemyKind, EnemyType> = {
@@ -105,6 +262,12 @@ export const ENEMIES: Record<EnemyKind, EnemyType> = {
     xp: (l) => Math.round(11 + l * 6),
     gold: (l) => Math.round(3 + l * 2.4),
     dropChance: 0.2,
+    lore:
+      'Grey wolves hold the low ground from the Vale to the Thicket. They are ' +
+      'not brave animals — they are patient ones, and they count.',
+    habits:
+      'Fast, sees you from a long way off, and never arrives alone. Packs of ' +
+      'three to five den together, which is exactly what Whirlwind is for.',
   },
   bear: {
     id: 'bear',
@@ -124,6 +287,12 @@ export const ENEMIES: Record<EnemyKind, EnemyType> = {
     xp: (l) => Math.round(30 + l * 13),
     gold: (l) => Math.round(9 + l * 5),
     dropChance: 0.34,
+    lore:
+      'Brown bears own the Stonewatch ridge and see no reason to explain ' +
+      'themselves. Elders have been up there longer than the hold has.',
+    habits:
+      'Slow, short-sighted, and hits like a falling tree. One or two to a ' +
+      'ground, so nothing rescues it — and nothing rescues you either.',
   },
 }
 
@@ -480,4 +649,361 @@ export const WHIRLWIND = {
 export const SECOND_WIND = {
   healFraction: 0.4,
   cooldown: 24,
+}
+
+/* ------------------------------------------------------------------ *
+ * Talents — the choice a level-up hands you
+ * ------------------------------------------------------------------ */
+
+export interface TalentDef {
+  id: string
+  name: string
+  desc: string
+  mods: Partial<Mods>
+}
+
+export interface TalentRow {
+  id: string
+  name: string
+  /** The level that unlocks this row's single pick. */
+  level: number
+  choices: TalentDef[]
+}
+
+/**
+ * Three nodes per row, one pick, and the rows are deliberately *not* a tree:
+ * a tree's real content is its prerequisites, and there is not enough game here
+ * yet to make a prerequisite mean anything. Each row instead specialises one
+ * thing the player already does — swinging, spinning, recovering, finishing.
+ */
+export const TALENT_ROWS: TalentRow[] = [
+  {
+    id: 'stance',
+    name: 'Stance',
+    level: 2,
+    choices: [
+      {
+        id: 'brutality',
+        name: 'Brutality',
+        desc: 'Every blow lands 10% harder.',
+        mods: { damageMult: 1.1 },
+      },
+      {
+        id: 'alacrity',
+        name: 'Alacrity',
+        desc: 'You swing 12% faster.',
+        mods: { attackSpeedMult: 1.12 },
+      },
+      {
+        id: 'endurance',
+        name: 'Endurance',
+        desc: '12% more maximum health.',
+        mods: { maxHpMult: 1.12 },
+      },
+    ],
+  },
+  {
+    id: 'spin',
+    name: 'The Spin',
+    level: 5,
+    choices: [
+      {
+        id: 'wide-arc',
+        name: 'Wide Arc',
+        desc: 'Whirlwind reaches 35% further.',
+        mods: { wwRadiusMult: 1.35 },
+      },
+      {
+        id: 'quick-spin',
+        name: 'Quick Spin',
+        desc: 'Whirlwind comes back 35% sooner.',
+        mods: { wwCooldownMult: 0.65 },
+      },
+      {
+        id: 'heavy-spin',
+        name: 'Heavy Spin',
+        desc: 'Whirlwind hits half again as hard.',
+        mods: { wwDamageMult: 1.5 },
+      },
+    ],
+  },
+  {
+    id: 'recovery',
+    name: 'Recovery',
+    level: 8,
+    choices: [
+      {
+        id: 'deep-breath',
+        name: 'Deep Breath',
+        desc: 'Second Wind heals half again as much.',
+        mods: { swHealMult: 1.5 },
+      },
+      {
+        id: 'quick-breath',
+        name: 'Quick Breath',
+        desc: 'Second Wind comes back 40% sooner.',
+        mods: { swCooldownMult: 0.6 },
+      },
+      {
+        id: 'field-dressing',
+        name: 'Field Dressing',
+        desc: 'You mend four times as fast out of combat.',
+        mods: { regenMult: 4 },
+      },
+    ],
+  },
+  {
+    id: 'predation',
+    name: 'Predation',
+    level: 11,
+    choices: [
+      {
+        id: 'executioner',
+        name: 'Executioner',
+        desc: `+35% damage to beasts below ${Math.round(EXECUTE_BELOW * 100)}% health.`,
+        mods: { executeMult: 1.35 },
+      },
+      {
+        id: 'ambusher',
+        name: 'Ambusher',
+        desc: '+45% damage to beasts you have not yet wounded.',
+        mods: { openerMult: 1.45 },
+      },
+      {
+        id: 'cleaver',
+        name: 'Cleaver',
+        desc: 'Your swing arc is 25% wider and reaches 14 further.',
+        mods: { swingArcMult: 1.25, swingRangeAdd: 14 },
+      },
+    ],
+  },
+  {
+    id: 'legend',
+    name: 'Legend',
+    level: 14,
+    choices: [
+      {
+        id: 'bloodthirst',
+        name: 'Bloodthirst',
+        desc: 'Every kill restores 2% of your maximum health.',
+        mods: { lifeOnKill: 0.02 },
+      },
+      {
+        id: 'warlord',
+        name: 'Warlord',
+        desc: '+7% damage for every beast crowding you, up to +35%.',
+        mods: { frenzyPer: 0.07, frenzyCap: 0.35 },
+      },
+      {
+        id: 'fortune',
+        name: 'Fortune',
+        desc: '+30% chance of a drop and +20% gold.',
+        mods: { dropChanceMult: 1.3, goldMult: 1.2 },
+      },
+    ],
+  },
+]
+
+export function talentById(id: string): TalentDef | null {
+  for (const row of TALENT_ROWS) {
+    const found = row.choices.find((c) => c.id === id)
+    if (found) return found
+  }
+  return null
+}
+
+export function rowOfTalent(id: string): TalentRow | null {
+  return TALENT_ROWS.find((row) => row.choices.some((c) => c.id === id)) ?? null
+}
+
+/**
+ * Respeccing is a gold sink rather than a wall. A permanent choice would be
+ * answered by looking up a build; a priced one is answered by playing, and the
+ * economy has no drains at all otherwise.
+ */
+export const RESPEC_COST_PER_LEVEL = 120
+
+/* ------------------------------------------------------------------ *
+ * Uniques — items that change a rule instead of a number
+ * ------------------------------------------------------------------ */
+
+/** Burning ground left by Whirlwind while Emberfang is worn. */
+export const EMBER = {
+  seconds: 4,
+  /** Share of your damage dealt per second to everything standing in it. */
+  dpsFraction: 0.55,
+  tick: 0.5,
+  radiusMult: 0.92,
+}
+
+export interface UniqueDef {
+  id: string
+  name: string
+  slot: Slot
+  icon: IconKind
+  /** Per-item-level base stat, deliberately thin. See the note below. */
+  dmg?: number
+  armor?: number
+  /** The rule, in the words the tooltip uses. */
+  rule: string
+  flavour: string
+  mods: Partial<Mods>
+  /** Which species' elites carry it. `null` means any elite may. */
+  from: EnemyKind | null
+}
+
+/**
+ * Every base stat here is roughly half what an ordinary item of the same slot
+ * would roll, and that is the entire point: `itemScore` collapses gear to one
+ * number and auto-equip takes the bigger one, so a unique that also won on
+ * stats would be picked up automatically and decide nothing.
+ *
+ * Because they cannot be ranked, uniques sit outside auto-equip in both
+ * directions — never equipped for you, never swapped off you. Wearing one is
+ * the first choice in the game the simulation cannot make on your behalf.
+ */
+export const UNIQUES: UniqueDef[] = [
+  {
+    id: 'emberfang',
+    name: 'Emberfang',
+    slot: 'weapon',
+    icon: 'axe',
+    dmg: 0.85,
+    rule: `Whirlwind leaves burning ground for ${EMBER.seconds} seconds.`,
+    flavour: 'Quenched in a campfire that had not finished with it.',
+    mods: { emberTrail: true },
+    from: 'wolf',
+  },
+  {
+    id: 'carrion-heart',
+    name: 'Carrion Heart',
+    slot: 'chest',
+    icon: 'chest',
+    armor: 0.85,
+    rule: 'Every kill restores 4% of your maximum health.',
+    flavour: 'It beats a little faster near the dying.',
+    mods: { lifeOnKill: 0.04 },
+    from: 'bear',
+  },
+  {
+    id: 'quarrys-eye',
+    name: "The Quarry's Eye",
+    slot: 'head',
+    icon: 'helm',
+    armor: 0.5,
+    rule: 'Your first blow against an unwounded beast always crits.',
+    flavour: 'Rangers say the trick is to look where the animal is going to be.',
+    mods: { ambush: true },
+    from: null,
+  },
+  {
+    id: 'wolfsbane-band',
+    name: 'Wolfsbane Band',
+    slot: 'ring',
+    icon: 'ring',
+    rule: '+90% damage to wolves. −35% damage to everything else.',
+    flavour: 'Cut for one hunt, and no other.',
+    mods: { vsWolf: 1.9, vsBear: 0.65 },
+    from: 'wolf',
+  },
+  {
+    id: 'longstride',
+    name: 'Longstride Sabatons',
+    slot: 'feet',
+    icon: 'boots',
+    armor: 0.45,
+    rule: 'You move 22% faster, and beasts give up the chase far sooner.',
+    flavour: 'Worn thin by someone who never once stood their ground.',
+    mods: { moveSpeedMult: 1.22, leashMult: 0.7 },
+    from: null,
+  },
+  {
+    id: 'second-breath',
+    name: 'Gauntlets of the Second Breath',
+    slot: 'hands',
+    icon: 'gloves',
+    armor: 0.4,
+    rule: `Each kill returns 3 seconds of Second Wind — all of it below ${Math.round(
+      DESPERATE_BELOW * 100,
+    )}% health.`,
+    flavour: 'The march does not stop to let you breathe. These do.',
+    mods: { breathOnKill: 3 },
+    from: 'bear',
+  },
+]
+
+export function uniqueById(id: string): UniqueDef | null {
+  return UNIQUES.find((u) => u.id === id) ?? null
+}
+
+/** Chance an elite carries a relic the character has never found, before scaling. */
+export const UNIQUE_DROP_CHANCE = 0.08
+
+/* ------------------------------------------------------------------ *
+ * Beast mastery — the bestiary's reward for kills already counted
+ * ------------------------------------------------------------------ */
+
+/**
+ * Read straight off `Counters.wolf` / `Counters.bear`, which the game has been
+ * keeping since the first commit. Nothing new is stored: mastery is a view of
+ * kills, so it survives any save and can never disagree with the bestiary.
+ */
+export const MASTERY_TIERS = [
+  { at: 25, name: 'Tracker', damage: 1.06, resist: 1 },
+  { at: 100, name: 'Stalker', damage: 1.12, resist: 0.95 },
+  { at: 300, name: 'Bane', damage: 1.2, resist: 0.9 },
+  { at: 750, name: 'Nemesis', damage: 1.3, resist: 0.85 },
+]
+
+/** Index into `MASTERY_TIERS`, or -1 before the first tier. */
+export function masteryTier(kills: number): number {
+  let tier = -1
+  for (let i = 0; i < MASTERY_TIERS.length; i++) {
+    if (kills >= MASTERY_TIERS[i]!.at) tier = i
+  }
+  return tier
+}
+
+export function masteryMods(kills: Record<EnemyKind, number>): Partial<Mods> {
+  const wolf = MASTERY_TIERS[masteryTier(kills.wolf)]
+  const bear = MASTERY_TIERS[masteryTier(kills.bear)]
+  return {
+    vsWolf: wolf?.damage ?? 1,
+    fromWolf: wolf?.resist ?? 1,
+    vsBear: bear?.damage ?? 1,
+    fromBear: bear?.resist ?? 1,
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Assembling a build
+ * ------------------------------------------------------------------ */
+
+/**
+ * The single place the three sources are folded together, in a fixed order, so
+ * the live game and the offline ledger can never disagree about what a
+ * character's rules are. Takes ids rather than items on purpose: the ledger
+ * works from a save, not from a `Game`.
+ */
+export function buildMods(
+  wornUniques: readonly (string | undefined)[],
+  talents: readonly string[],
+  kills: Record<EnemyKind, number>,
+): Mods {
+  const m = baseMods()
+  for (const id of wornUniques) {
+    const def = id ? uniqueById(id) : null
+    if (def) mergeMods(m, def.mods)
+  }
+  for (const id of talents) {
+    const t = talentById(id)
+    if (t) mergeMods(m, t.mods)
+  }
+  mergeMods(m, masteryMods(kills))
+  return m
+}
+
+/** Damage multiplier against one species, from mastery and any worn relic. */
+export function damageVs(mods: Readonly<Mods>, kind: EnemyKind): number {
+  return kind === 'wolf' ? mods.vsWolf : mods.vsBear
 }

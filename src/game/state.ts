@@ -10,28 +10,53 @@
 import { clamp, dist, facingToDir, rng, type Rng } from '../core/math'
 import {
   CRIT_MULT,
+  DESPERATE_BELOW,
   ELITE,
+  EMBER,
   ENEMIES,
+  EXECUTE_BELOW,
+  MASTERY_TIERS,
   MILESTONES,
   PLAYER_RADIUS,
   PLAYER_SPEED,
   QUESTS,
+  RARITY_COLORS,
+  RESPEC_COST_PER_LEVEL,
   SECOND_WIND,
   SWING_DURATION,
   SWING_HALF_ANGLE,
   SWING_RANGE,
+  TALENT_ROWS,
+  UNIQUES,
+  UNIQUE_DROP_CHANCE,
   WHIRLWIND,
+  baseMods,
+  buildMods,
   deriveStats,
+  masteryTier,
   mitigate,
   rewardScale,
+  rowOfTalent,
+  talentById,
+  uniqueById,
   xpForLevel,
   xpScale,
   type DerivedStats,
+  type Mods,
   type QuestReward,
+  type TalentRow,
 } from './content'
-import { itemScore, makeItem, restoreUidMark, sumStats, uidMark } from './loot'
+import {
+  itemScore,
+  makeItem,
+  makeUnique,
+  restoreUidMark,
+  sumStats,
+  uidMark,
+  uniqueDefOf,
+} from './loot'
 import type { OfflineReport } from './offline'
-import { SAVE_VERSION, type SaveV1 } from './save'
+import { SAVE_VERSION, type Save } from './save'
 import {
   CAMPS,
   REGIONS,
@@ -51,6 +76,7 @@ import {
   type Effect,
   type Enemy,
   type FloatText,
+  type Ground,
   type Item,
   type Player,
   type Slot,
@@ -87,6 +113,8 @@ export class Game {
   readonly corpses: Corpse[] = []
   readonly floats: FloatText[] = []
   readonly effects: Effect[] = []
+  /** Burning ground. Simulation, not decoration — see `stepGrounds`. */
+  readonly grounds: Ground[] = []
   readonly bag: (Item | null)[] = new Array(BAG_SIZE).fill(null)
   readonly equipped: Record<Slot, Item | null> = {
     weapon: null,
@@ -116,6 +144,15 @@ export class Game {
   ]
 
   stats: DerivedStats
+  /**
+   * Everything talents, worn relics and beast mastery have to say about the
+   * rules, folded into one object by `recalc`. Read it; never write to it.
+   */
+  mods: Mods = baseMods()
+  /** One talent id per unlocked row. Changing a pick costs a respec. */
+  talents: string[] = []
+  /** Relics this character has ever found, so no elite drops one twice. */
+  foundUniques = new Set<string>()
   counters: Counters = { kills: 0, wolf: 0, bear: 0, elite: 0, gold: 0, quests: 0 }
   questIndex = 0
   questProgress = 0
@@ -182,7 +219,7 @@ export class Game {
 
   /* ================= persistence ================= */
 
-  serialize(): SaveV1 {
+  serialize(): Save {
     const p = this.player
     return {
       v: SAVE_VERSION,
@@ -212,6 +249,8 @@ export class Game {
       huntingGround: this.huntingGround,
       groundPinned: this.groundPinned,
       autoEquip: this.autoEquip,
+      talents: [...this.talents],
+      foundUniques: [...this.foundUniques],
     }
   }
 
@@ -219,7 +258,7 @@ export class Game {
    * Applied on top of a freshly constructed game, so the world is already
    * generated and every spawn node already full. Only the character is restored.
    */
-  hydrate(s: SaveV1) {
+  hydrate(s: Save) {
     const p = this.player
     p.x = s.player.x
     p.y = s.player.y
@@ -245,6 +284,10 @@ export class Game {
     this.huntingGround = s.huntingGround
     this.groundPinned = s.groundPinned ?? false
     this.autoEquip = s.autoEquip
+    // Ids no longer in the tables are dropped rather than carried as dead
+    // entries: a renamed talent should refund its pick, not haunt the build.
+    this.talents = s.talents.filter((id) => talentById(id) !== null)
+    this.foundUniques = new Set(s.foundUniques.filter((id) => uniqueById(id) !== null))
 
     // The loot stream is fixed-seed and its position is not recoverable from the
     // closure, so reseed it. Without this every session rolls the same sequence
@@ -327,7 +370,10 @@ export class Game {
 
     this.gainXp(r.xp, true)
     this.gainGold(r.gold)
+    for (const id of r.uniques) this.foundUniques.add(id)
     for (const item of r.items) this.addItem(item)
+    // Kills earned overnight move mastery tiers exactly as waking ones do.
+    this.recalc()
     this.hooks.dirty()
   }
 
@@ -335,7 +381,9 @@ export class Game {
 
   recalc(): DerivedStats {
     const gear = sumStats(SLOTS.map((s) => this.equipped[s]))
-    this.stats = deriveStats(this.player.level, this.player, gear)
+    this.mods = this.computeMods()
+    this.stats = deriveStats(this.player.level, this.player, gear, this.mods)
+    this.describeAbilities()
     const p = this.player
     const prevMax = p.maxHp
     p.maxHp = this.stats.maxHp
@@ -343,6 +391,107 @@ export class Game {
     else if (p.maxHp > prevMax) p.hp += p.maxHp - prevMax
     p.hp = clamp(p.hp, 0, p.maxHp)
     return this.stats
+  }
+
+  /**
+   * Three sources, folded in a fixed order so the result never depends on when
+   * a relic was equipped or a talent taken.
+   */
+  private computeMods(): Mods {
+    return buildMods(
+      SLOTS.map((s) => this.equipped[s]?.unique),
+      this.talents,
+      this.counters,
+    )
+  }
+
+  /**
+   * Ability cooldowns and their descriptions are derived, not authored — a
+   * talent that changes one has to change what the button says, or the HUD is
+   * quietly lying about the build.
+   */
+  private describeAbilities() {
+    const ww = this.abilities[0]!
+    const sw = this.abilities[1]!
+    ww.cooldown = WHIRLWIND.cooldown * this.mods.wwCooldownMult
+    ww.desc = `Spin through every beast within reach for ${Math.round(
+      WHIRLWIND.damageMult * this.mods.wwDamageMult * 100,
+    )}% weapon damage.`
+    sw.cooldown = SECOND_WIND.cooldown * this.mods.swCooldownMult
+    sw.desc = `Recover ${Math.round(
+      SECOND_WIND.healFraction * this.mods.swHealMult * 100,
+    )}% of maximum health.`
+    // Shortening a cooldown must not leave the current timer above its own
+    // maximum — the HUD draws cd/cooldown and would overflow the fill.
+    ww.cd = Math.min(ww.cd, ww.cooldown)
+    sw.cd = Math.min(sw.cd, sw.cooldown)
+  }
+
+  /* ================= build-derived reach ================= */
+
+  get moveSpeed(): number {
+    return PLAYER_SPEED * this.mods.moveSpeedMult
+  }
+
+  get swingRange(): number {
+    return SWING_RANGE + this.mods.swingRangeAdd
+  }
+
+  get swingArc(): number {
+    return Math.min(Math.PI, SWING_HALF_ANGLE * this.mods.swingArcMult)
+  }
+
+  get whirlwindRadius(): number {
+    return WHIRLWIND.radius * this.mods.wwRadiusMult
+  }
+
+  /* ================= talents ================= */
+
+  /** Rows this character has reached the level for. */
+  unlockedRows(): TalentRow[] {
+    return TALENT_ROWS.filter((r) => this.player.level >= r.level)
+  }
+
+  talentIn(row: TalentRow): string | null {
+    return this.talents.find((id) => row.choices.some((c) => c.id === id)) ?? null
+  }
+
+  get talentPoints(): number {
+    let n = 0
+    for (const row of this.unlockedRows()) if (!this.talentIn(row)) n++
+    return n
+  }
+
+  chooseTalent(id: string): boolean {
+    const def = talentById(id)
+    const row = rowOfTalent(id)
+    if (!def || !row) return false
+    if (this.player.level < row.level) return false
+    // One per row, and taken picks are final until a respec. A free swap would
+    // make the choice a menu rather than a decision.
+    if (this.talentIn(row)) return false
+    this.talents.push(id)
+    this.recalc()
+    this.hooks.log(`${def.name} — ${def.desc}`, '#9ad0ff')
+    this.hooks.dirty()
+    return true
+  }
+
+  get respecCost(): number {
+    return this.talents.length ? RESPEC_COST_PER_LEVEL * this.player.level : 0
+  }
+
+  respec(): boolean {
+    const cost = this.respecCost
+    if (!cost || this.player.gold < cost) return false
+    // Spends the purse without touching lifetime gold earned — this is a drain
+    // on the economy, not a retraction of what the character has made.
+    this.player.gold -= cost
+    this.talents.length = 0
+    this.recalc()
+    this.hooks.log(`Retrained for ${cost}g`, '#d8c07a')
+    this.hooks.dirty()
+    return true
   }
 
   setView(x0: number, y0: number, x1: number, y1: number) {
@@ -417,6 +566,8 @@ export class Game {
     if (!p.alive) {
       p.deadT += dt
       if (p.deadT > 2.6) this.respawn()
+      // Fire you already lit keeps burning while you are down.
+      this.stepGrounds(dt)
       this.stepTransient(dt)
       return
     }
@@ -429,6 +580,7 @@ export class Game {
     else this.stepManual(dt, moveX, moveY)
 
     this.stepSwing(dt)
+    this.stepGrounds(dt)
     this.stepEnemies(dt)
     this.stepRegen(dt)
     this.stepSpawns()
@@ -440,7 +592,7 @@ export class Game {
     const mag = Math.hypot(mx, my)
     if (mag > 0.05) {
       p.facing = Math.atan2(my, mx)
-      this.moveEntity(p, mx * PLAYER_SPEED * dt, my * PLAYER_SPEED * dt)
+      this.moveEntity(p, mx * this.moveSpeed * dt, my * this.moveSpeed * dt)
       p.moving = true
       p.anim += dt * 8 * Math.min(1, mag * 1.4)
     } else {
@@ -450,7 +602,7 @@ export class Game {
     p.dir = facingToDir(p.facing)
     // Standing still with a beast in reach still swings — the warrior never
     // waits for a button.
-    const t = this.nearestEnemy(p.x, p.y, SWING_RANGE + 26, true)
+    const t = this.nearestEnemy(p.x, p.y, this.swingRange + 26, true)
     if (t && !p.moving) p.facing = Math.atan2(t.y - p.y, t.x - p.x)
     if (t) p.dir = facingToDir(p.facing)
   }
@@ -470,13 +622,13 @@ export class Game {
     if (target) {
       this.roamTarget = null
       const d = dist(p.x, p.y, target.x, target.y)
-      const reach = SWING_RANGE * 0.62 + target.radius
+      const reach = this.swingRange * 0.62 + target.radius
       p.facing = Math.atan2(target.y - p.y, target.x - p.x)
       if (d > reach) {
         this.moveEntity(
           p,
-          Math.cos(p.facing) * PLAYER_SPEED * dt,
-          Math.sin(p.facing) * PLAYER_SPEED * dt,
+          Math.cos(p.facing) * this.moveSpeed * dt,
+          Math.sin(p.facing) * this.moveSpeed * dt,
         )
         p.moving = true
         p.anim += dt * 8
@@ -486,7 +638,7 @@ export class Game {
       }
       // Whirlwind pays for itself once a pack closes in.
       const ww = this.abilities[0]!
-      if (ww.cd <= 0 && this.countEnemiesWithin(p.x, p.y, WHIRLWIND.radius) >= 2) {
+      if (ww.cd <= 0 && this.countEnemiesWithin(p.x, p.y, this.whirlwindRadius) >= 2) {
         this.useAbility('whirlwind')
       }
     } else {
@@ -518,7 +670,7 @@ export class Game {
     }
     const a = Math.atan2(this.roamTarget.y - p.y, this.roamTarget.x - p.x)
     p.facing = a
-    this.moveEntity(p, Math.cos(a) * PLAYER_SPEED * dt, Math.sin(a) * PLAYER_SPEED * dt)
+    this.moveEntity(p, Math.cos(a) * this.moveSpeed * dt, Math.sin(a) * this.moveSpeed * dt)
     p.moving = true
     p.anim += dt * 8
   }
@@ -537,7 +689,7 @@ export class Game {
       return
     }
     if (p.attackCd > 0) return
-    const target = this.nearestEnemy(p.x, p.y, SWING_RANGE + 20, true)
+    const target = this.nearestEnemy(p.x, p.y, this.swingRange + 20, true)
     if (!target) return
     p.targetId = target.id
     p.facing = Math.atan2(target.y - p.y, target.x - p.x)
@@ -550,17 +702,19 @@ export class Game {
 
   private resolveSwing() {
     const p = this.player
+    const range = this.swingRange
+    const arc = this.swingArc
     let hits = 0
     for (const e of this.enemies) {
       if (!e.alive || e.state === 'return') continue
       const dx = e.x - p.x
       const dy = e.y - p.y
       const d = Math.hypot(dx, dy)
-      if (d > SWING_RANGE + e.radius) continue
+      if (d > range + e.radius) continue
       let da = Math.abs(Math.atan2(dy, dx) - p.swingDir) % (Math.PI * 2)
       if (da > Math.PI) da = Math.PI * 2 - da
-      if (da > SWING_HALF_ANGLE) continue
-      this.damageEnemy(e, this.rollDamage())
+      if (da > arc) continue
+      this.damageEnemy(e, this.rollDamage(1, e))
       hits++
     }
     this.effects.push({
@@ -570,16 +724,38 @@ export class Game {
       t: 0,
       life: 0.22,
       angle: p.swingDir,
-      radius: SWING_RANGE * 0.86,
+      radius: range * 0.86,
       color: '#eaf1ff',
     })
     if (hits) this.outOfCombat = 0
   }
 
-  private rollDamage(mult = 1): { amount: number; crit: boolean } {
-    const crit = this.rand() < this.stats.crit
-    const base = this.stats.damage * mult * this.rand.range(0.9, 1.1)
+  /**
+   * The target matters now: species, wounds and how crowded you are all move
+   * the number, and `ambush` skips the crit roll outright. Passing no target is
+   * still valid — it just means none of those rules can apply.
+   */
+  private rollDamage(mult = 1, target?: Enemy): { amount: number; crit: boolean } {
+    let m = mult * this.frenzyMult()
+    let certain = false
+    if (target) {
+      m *= target.kind === 'wolf' ? this.mods.vsWolf : this.mods.vsBear
+      if (target.hp >= target.maxHp) {
+        m *= this.mods.openerMult
+        certain = this.mods.ambush
+      }
+      if (target.hp <= target.maxHp * EXECUTE_BELOW) m *= this.mods.executeMult
+    }
+    const crit = certain || this.rand() < this.stats.crit
+    const base = this.stats.damage * m * this.rand.range(0.9, 1.1)
     return { amount: Math.max(1, Math.round(base * (crit ? CRIT_MULT : 1))), crit }
+  }
+
+  /** Warlord: the more of them there are, the harder each blow lands. */
+  private frenzyMult(): number {
+    if (this.mods.frenzyPer <= 0) return 1
+    const near = this.countEnemiesWithin(this.player.x, this.player.y, this.whirlwindRadius)
+    return 1 + Math.min(this.mods.frenzyCap, this.mods.frenzyPer * Math.max(0, near - 1))
   }
 
   /* ================= abilities ================= */
@@ -590,11 +766,12 @@ export class Game {
     const p = this.player
     if (id === 'whirlwind') {
       ab.cd = ab.cooldown
+      const radius = this.whirlwindRadius
       let hits = 0
       for (const e of this.enemies) {
         if (!e.alive || e.state === 'return') continue
-        if (dist(p.x, p.y, e.x, e.y) > WHIRLWIND.radius + e.radius) continue
-        this.damageEnemy(e, this.rollDamage(WHIRLWIND.damageMult))
+        if (dist(p.x, p.y, e.x, e.y) > radius + e.radius) continue
+        this.damageEnemy(e, this.rollDamage(WHIRLWIND.damageMult * this.mods.wwDamageMult, e))
         hits++
       }
       this.effects.push({
@@ -604,13 +781,14 @@ export class Game {
         t: 0,
         life: 0.42,
         angle: 0,
-        radius: WHIRLWIND.radius,
-        color: '#cfe0ff',
+        radius,
+        color: this.mods.emberTrail ? '#ffb066' : '#cfe0ff',
       })
+      if (this.mods.emberTrail) this.lightGround(p.x, p.y, radius * EMBER.radiusMult)
       this.hooks.log(hits ? `Whirlwind hits ${hits}` : 'Whirlwind swings wide', '#cfe0ff')
     } else {
       ab.cd = ab.cooldown
-      const heal = Math.round(p.maxHp * SECOND_WIND.healFraction)
+      const heal = Math.round(p.maxHp * SECOND_WIND.healFraction * this.mods.swHealMult)
       p.hp = Math.min(p.maxHp, p.hp + heal)
       this.pushFloat(p.x, p.y - 34, `+${heal}`, '#7ed48d', 9)
       this.effects.push({
@@ -626,6 +804,40 @@ export class Game {
     }
     this.hooks.dirty()
     return true
+  }
+
+  /**
+   * Emberfang's burning ground. Damage is fixed at the moment it is lit rather
+   * than sampled per tick, so a patch is worth what the swing that made it was
+   * worth — dropping your weapon mid-burn does not put the fire out.
+   */
+  private lightGround(x: number, y: number, radius: number) {
+    this.grounds.push({
+      x,
+      y,
+      radius,
+      t: 0,
+      life: EMBER.seconds,
+      perTick: Math.max(1, Math.round(this.stats.damage * EMBER.dpsFraction * EMBER.tick)),
+      next: EMBER.tick,
+    })
+  }
+
+  private stepGrounds(dt: number) {
+    for (let i = this.grounds.length - 1; i >= 0; i--) {
+      const g = this.grounds[i]!
+      g.t += dt
+      g.next -= dt
+      if (g.next <= 0) {
+        g.next += EMBER.tick
+        for (const e of this.enemies) {
+          if (!e.alive || e.state === 'return') continue
+          if (dist(e.x, e.y, g.x, g.y) > g.radius + e.radius) continue
+          this.damageEnemy(e, { amount: g.perTick, crit: false }, 'burn')
+        }
+      }
+      if (g.t >= g.life) this.grounds.splice(i, 1)
+    }
   }
 
   /* ================= enemies ================= */
@@ -794,8 +1006,11 @@ export class Game {
     const p = this.player
     if (!p.alive) return true
     if (this.world.campAt(p.x, p.y)) return true
-    if (dist(e.x, e.y, e.ax, e.ay) > e.leash) return true
-    if (dPlayer > e.aggroRange * 2.6) return true
+    // `leashMult` is only ever set below 1 — content may end a chase sooner,
+    // never stretch it, or the no-monster-trains rule stops being a rule.
+    const shorten = Math.min(1, this.mods.leashMult)
+    if (dist(e.x, e.y, e.ax, e.ay) > e.leash * shorten) return true
+    if (dPlayer > e.aggroRange * 2.6 * shorten) return true
     const pad = 30
     const off =
       e.x < this.view.x0 - pad ||
@@ -812,7 +1027,7 @@ export class Game {
 
   /* ================= damage ================= */
 
-  damageEnemy(e: Enemy, hit: { amount: number; crit: boolean }) {
+  damageEnemy(e: Enemy, hit: { amount: number; crit: boolean }, source: 'hit' | 'burn' = 'hit') {
     if (!e.alive) return
     e.hp -= hit.amount
     e.hitFlash = 0.12
@@ -821,19 +1036,23 @@ export class Game {
       e.x + this.rand.range(-6, 6),
       e.y - e.radius - 12,
       `${hit.amount}`,
-      hit.crit ? '#ffd166' : '#ffffff',
+      source === 'burn' ? '#ff9b4a' : hit.crit ? '#ffd166' : '#ffffff',
       hit.crit ? 10 : 8,
     )
-    this.effects.push({
-      kind: 'spark',
-      x: e.x,
-      y: e.y - e.radius * 0.6,
-      t: 0,
-      life: 0.18,
-      angle: this.rand() * Math.PI * 2,
-      radius: 9,
-      color: '#ffe6c0',
-    })
+    // Burning ground ticks twice a second on everything standing in it; a spark
+    // per beast per tick would bury the screen for no extra information.
+    if (source === 'hit') {
+      this.effects.push({
+        kind: 'spark',
+        x: e.x,
+        y: e.y - e.radius * 0.6,
+        t: 0,
+        life: 0.18,
+        angle: this.rand() * Math.PI * 2,
+        radius: 9,
+        color: '#ffe6c0',
+      })
+    }
     // Getting hit while wandering is a valid way to start a fight.
     if (e.state === 'idle' || e.state === 'wander') this.setEnemyState(e, 'chase')
     if (e.hp <= 0) this.killEnemy(e)
@@ -843,7 +1062,8 @@ export class Game {
     const p = this.player
     if (!p.alive || p.invuln > 0) return
     const raw = e.dmg * this.rand.range(0.9, 1.12)
-    const amount = Math.max(1, Math.round(mitigate(raw, this.stats.armor, e.level)))
+    const resist = e.kind === 'wolf' ? this.mods.fromWolf : this.mods.fromBear
+    const amount = Math.max(1, Math.round(mitigate(raw, this.stats.armor, e.level) * resist))
     p.hp -= amount
     p.hitFlash = 0.18
     this.outOfCombat = 0
@@ -908,26 +1128,57 @@ export class Game {
    * someone else, so the loop lands with the player registry, not before it.)
    */
   private creditKill(e: Enemy) {
-    // Acknowledgment is unconditional; only the payout scales.
+    // Acknowledgment is unconditional; only the payout scales. Mastery reads
+    // off these counters, so its tier can only ever move here.
+    const tierBefore = masteryTier(this.counters[e.kind])
     this.counters.kills++
     this.counters[e.kind]++
     if (e.elite) this.counters.elite++
     this.advanceQuestOnKill(e)
+    const tierAfter = masteryTier(this.counters[e.kind])
+    if (tierAfter > tierBefore) this.announceMastery(e.kind, tierAfter)
 
     // Gold and drops keep the floored curve — a trivial beast is still worth
     // looting. Experience alone can reach zero, so a region can be outgrown.
     const scale = rewardScale(this.player.level, e.level)
     const xps = xpScale(this.player.level, e.level)
-    this.gainGold(Math.max(1, Math.round(e.goldValue * scale)))
+    this.gainGold(Math.max(1, Math.round(e.goldValue * scale * this.mods.goldMult)))
     if (xps > 0) this.gainXp(Math.max(1, Math.round(e.xpValue * xps)))
     this.rollDrop(e, scale)
+    this.rollUnique(e, scale)
+    this.payKillRules()
+  }
+
+  /**
+   * Rules that fire on a kill regardless of what died — the half of a relic or
+   * talent that is a verb rather than a number.
+   */
+  private payKillRules() {
+    const p = this.player
+    if (this.mods.lifeOnKill > 0 && p.hp < p.maxHp) {
+      const heal = Math.max(1, Math.round(p.maxHp * this.mods.lifeOnKill))
+      p.hp = Math.min(p.maxHp, p.hp + heal)
+      this.pushFloat(p.x, p.y - 40, `+${heal}`, '#7ed48d', 8)
+    }
+    if (this.mods.breathOnKill > 0) {
+      const sw = this.abilities[1]!
+      sw.cd =
+        p.hp < p.maxHp * DESPERATE_BELOW ? 0 : Math.max(0, sw.cd - this.mods.breathOnKill)
+    }
+  }
+
+  private announceMastery(kind: Enemy['kind'], tier: number) {
+    // Mastery feeds `mods`, so the build genuinely changes at a threshold.
+    this.recalc()
+    const t = MASTERY_TIERS[tier]
+    if (t) this.hooks.banner(`${ENEMIES[kind].name} — ${t.name}`, 'Beast mastery deepens')
   }
 
   /* ================= loot & progression ================= */
 
   private rollDrop(e: Enemy, scale = 1) {
     const type = ENEMIES[e.kind]
-    const chance = (e.elite ? ELITE.dropChance : type.dropChance) * scale
+    const chance = (e.elite ? ELITE.dropChance : type.dropChance) * scale * this.mods.dropChanceMult
     if (this.rand() > chance) return
     const rarity = Math.min(
       4,
@@ -946,9 +1197,38 @@ export class Game {
     this.addItem(item)
   }
 
+  /**
+   * Only elites carry relics, only ones this character has never found, and the
+   * chance rides the same level-gap curve as everything else — tapping an Elder
+   * Bear at level 3 must not be the fastest way to a build.
+   *
+   * Item level tracks the *player*, not the beast, because there is exactly one
+   * of each and it has to stay wearable.
+   */
+  private rollUnique(e: Enemy, scale: number) {
+    if (!e.elite) return
+    if (this.rand() > UNIQUE_DROP_CHANCE * scale) return
+    const pool = UNIQUES.filter(
+      (u) => !this.foundUniques.has(u.id) && (u.from === null || u.from === e.kind),
+    )
+    if (!pool.length) return
+    const def = this.rand.pick(pool)
+    this.foundUniques.add(def.id)
+    this.hooks.banner('Relic Found', def.name)
+    this.addItem(makeUnique(def, this.player.level))
+  }
+
   addItem(item: Item) {
+    // A relic is never ranked in either direction: auto-equip will not put one
+    // on, and will not take one off. `itemScore` cannot see the rule it carries,
+    // so letting it decide would quietly undo the only choice in the game.
+    if (item.unique) {
+      this.stowUnique(item)
+      return
+    }
     const slot = this.bag.indexOf(null)
-    const better = itemScore(item) > itemScore(this.equipped[item.slot])
+    const current = this.equipped[item.slot]
+    const better = !current?.unique && itemScore(item) > itemScore(current)
     if (this.autoEquip && better) {
       const old = this.equipped[item.slot]
       this.equipped[item.slot] = item
@@ -970,6 +1250,41 @@ export class Game {
     this.hooks.dirty()
   }
 
+  /**
+   * Relics are unsellable, so the bag-overflow auto-sell that catches ordinary
+   * loot must never reach one. A full bag makes room by selling its worst
+   * ordinary item instead — with forty slots and six relics in the whole game,
+   * there is always one to sell.
+   */
+  private stowUnique(item: Item) {
+    let slot = this.bag.indexOf(null)
+    if (slot < 0) {
+      let worst = -1
+      let worstScore = Infinity
+      for (let i = 0; i < this.bag.length; i++) {
+        const it = this.bag[i]
+        if (!it || it.unique) continue
+        const s = itemScore(it)
+        if (s < worstScore) {
+          worstScore = s
+          worst = i
+        }
+      }
+      if (worst < 0) {
+        this.hooks.log(`No room for ${item.name}`, '#ff8b82')
+        return
+      }
+      const evicted = this.bag[worst]!
+      this.bag[worst] = null
+      this.sellItem(evicted, true)
+      slot = worst
+    }
+    this.bag[slot] = item
+    const def = uniqueDefOf(item)
+    this.hooks.log(`${item.name} — ${def?.rule ?? ''}`, RARITY_COLORS[4])
+    this.hooks.dirty()
+  }
+
   sellItem(item: Item, auto = false) {
     this.gainGold(item.value)
     this.hooks.log(
@@ -982,6 +1297,12 @@ export class Game {
   sellFromBag(index: number) {
     const item = this.bag[index]
     if (!item) return
+    // There is one of each relic and it never drops again. Nothing in the game
+    // may turn one into gold, least of all a stray right-click.
+    if (item.unique) {
+      this.hooks.log(`${item.name} cannot be sold`, '#ff8b82')
+      return
+    }
     this.bag[index] = null
     this.sellItem(item)
   }
@@ -1031,7 +1352,15 @@ export class Game {
       this.recalc()
       p.hp = p.maxHp
       if (quiet) continue
-      this.hooks.banner(`Level ${p.level}`, '+2 Strength  +2 Vitality  +1 Agility')
+      // A row unlocking is the more interesting half of the level-up, so it
+      // gets the banner and the stat trickle drops to a log line.
+      const row = TALENT_ROWS.find((r) => r.level === p.level)
+      if (row) {
+        this.hooks.banner('Talent Unlocked', row.name)
+        this.hooks.log(`Level ${p.level} — choose a ${row.name} talent`, '#9ad0ff')
+      } else {
+        this.hooks.banner(`Level ${p.level}`, '+2 Strength  +2 Vitality  +1 Agility')
+      }
       this.effects.push({
         kind: 'ring',
         x: p.x,
@@ -1161,7 +1490,7 @@ export class Game {
     if (p.hp >= p.maxHp) return
     let rate = 0
     if (this.currentCamp) rate = 0.14
-    else if (this.outOfCombat > 5) rate = 0.03
+    else if (this.outOfCombat > 5) rate = 0.03 * this.mods.regenMult
     if (rate > 0) p.hp = Math.min(p.maxHp, p.hp + p.maxHp * rate * dt)
   }
 

@@ -34,6 +34,12 @@ export interface Item {
   ilvl: number
   stats: ItemStats
   value: number
+  /**
+   * Id in `UNIQUES` when this item carries a rule rather than just numbers.
+   * Present means `itemScore` is not allowed to decide anything about it —
+   * auto-equip neither takes it nor replaces it, and it cannot be sold.
+   */
+  unique?: string
 }
 
 export type EnemyKind = 'wolf' | 'bear'
@@ -140,6 +146,23 @@ export interface Effect {
   angle: number
   radius: number
   color: string
+}
+
+/**
+ * A patch of ground that damages what stands in it. Unlike `Effect` this is
+ * simulation, not decoration: it ticks, it kills, and it keeps burning while
+ * the player is down.
+ */
+export interface Ground {
+  x: number
+  y: number
+  radius: number
+  t: number
+  life: number
+  /** Damage dealt per tick to every beast inside. */
+  perTick: number
+  /** Seconds until the next tick. */
+  next: number
 }
 
 export interface Corpse {

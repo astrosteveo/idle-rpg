@@ -15,7 +15,7 @@ import type { Counters } from './state'
 import type { Item, Slot } from './types'
 import type { BiomeId } from './world'
 
-export const SAVE_VERSION = 1
+export const SAVE_VERSION = 2
 export const SAVE_KEY = 'wildmarch.save'
 
 export interface SavedPlayer {
@@ -32,7 +32,7 @@ export interface SavedPlayer {
   auto: boolean
 }
 
-export interface SaveV1 {
+export interface SaveV2 {
   v: number
   /** Saves are tied to the world they were made in. */
   seed: number
@@ -52,23 +52,47 @@ export interface SaveV1 {
   /** Whether the ground was chosen deliberately or is still following the player. */
   groundPinned: boolean
   autoEquip: boolean
+  /** One talent id per unlocked row, in pick order. */
+  talents: string[]
+  /**
+   * Relics this character has ever found, so no elite drops the same one twice.
+   * Kept separate from the bag on purpose: a relic that was sold, or is sitting
+   * in storage a future version adds, is still found.
+   */
+  foundUniques: string[]
 }
 
+/** The schema at the current version. Everything outside this file uses it. */
+export type Save = SaveV2
+
 /**
- * Structural check only. A save from a different schema version or a different
- * world is discarded rather than migrated — real migrations arrive with the
- * first schema change worth preserving, and the `v` field is what makes them
- * possible later.
+ * Structural check plus a forward migration, in one pass, because callers only
+ * ever want the answer to "can I play this?".
+ *
+ * A save from another world is discarded — the seed decides where every camp
+ * and den is, so a character restored into a different one would be standing in
+ * a lake. Older schema versions are filled in with defaults instead, which is
+ * cheap while every addition so far is additive.
  */
-export function isSaveV1(x: unknown, expectSeed: number): x is SaveV1 {
-  if (!x || typeof x !== 'object') return false
-  const s = x as Partial<SaveV1>
-  if (s.v !== SAVE_VERSION) return false
-  if (s.seed !== expectSeed) return false
-  if (typeof s.savedAt !== 'number' || !Number.isFinite(s.savedAt)) return false
-  if (!s.player || typeof s.player.level !== 'number') return false
-  if (!Array.isArray(s.bag) || !s.equipped) return false
-  if (!s.counters || typeof s.counters.kills !== 'number') return false
-  if (!Array.isArray(s.claimed) || !Array.isArray(s.discovered)) return false
-  return true
+export function readSave(x: unknown, expectSeed: number): Save | null {
+  if (!x || typeof x !== 'object') return null
+  const s = x as Partial<Save>
+  if (typeof s.v !== 'number' || s.v < 1 || s.v > SAVE_VERSION) return null
+  if (s.seed !== expectSeed) return null
+  if (typeof s.savedAt !== 'number' || !Number.isFinite(s.savedAt)) return null
+  if (!s.player || typeof s.player.level !== 'number') return null
+  if (!Array.isArray(s.bag) || !s.equipped) return null
+  if (!s.counters || typeof s.counters.kills !== 'number') return null
+  if (!Array.isArray(s.claimed) || !Array.isArray(s.discovered)) return null
+
+  // v1 → v2: talents and found relics did not exist. An existing character
+  // keeps its level and simply arrives with its picks unspent.
+  const talents = Array.isArray(s.talents) ? s.talents.filter(isId) : []
+  const foundUniques = Array.isArray(s.foundUniques) ? s.foundUniques.filter(isId) : []
+
+  return { ...(s as Save), v: SAVE_VERSION, talents, foundUniques }
+}
+
+function isId(x: unknown): x is string {
+  return typeof x === 'string'
 }

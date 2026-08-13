@@ -6,7 +6,9 @@ import {
   PREFIXES,
   RARITY_NAMES,
   SUFFIXES,
+  uniqueById,
   type ItemBase,
+  type UniqueDef,
 } from './content'
 import type { Item, ItemStats } from './types'
 
@@ -75,7 +77,44 @@ export function makeItem(r: Rng, ilvl: number, rarity: number, baseId?: string):
   }
 }
 
-/** Single number used for "is this an upgrade?" comparisons and auto-equip. */
+/**
+ * A relic. Its base stat is roughly half an ordinary item's, which is what
+ * makes it a decision — see the note on `UNIQUES`. Item level tracks the
+ * character rather than the beast, so a relic found at 6 is not dead weight
+ * at 14; there is only ever one of each, and it has to last.
+ */
+export function makeUnique(def: UniqueDef, ilvl: number): Item {
+  const lvl = Math.max(1, Math.round(ilvl))
+  const stats: ItemStats = {}
+  if (def.dmg) stats.dmg = Math.round(def.dmg * lvl + 3)
+  if (def.armor) stats.armor = Math.round(def.armor * lvl + 2)
+  return {
+    uid: nextUid++,
+    base: def.id,
+    name: def.name,
+    slot: def.slot,
+    icon: def.icon,
+    rarity: 4,
+    ilvl: lvl,
+    stats,
+    // Unsellable. Relics never drop twice, and a bag-full auto-sell that ate
+    // one would destroy content the character can never recover.
+    value: 0,
+    unique: def.id,
+  }
+}
+
+export function uniqueDefOf(it: Item | null | undefined): UniqueDef | null {
+  return it?.unique ? uniqueById(it.unique) : null
+}
+
+/**
+ * Single number used for "is this an upgrade?" comparisons and auto-equip.
+ *
+ * It cannot rank a unique — the whole value of one is a rule this function
+ * knows nothing about — so callers must check `Item.unique` before letting a
+ * score decide anything. See `Game.addItem`.
+ */
 export function itemScore(it: Item | null | undefined): number {
   if (!it) return 0
   const s = it.stats

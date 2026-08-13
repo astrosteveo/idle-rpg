@@ -6,14 +6,14 @@
  * nothing in the simulation.
  */
 import type { Game } from '../game/state'
-import { SAVE_KEY, isSaveV1, type SaveV1 } from '../game/save'
+import { SAVE_KEY, readSave, type Save } from '../game/save'
 
-export function loadSave(expectSeed: number): SaveV1 | null {
+export function loadSave(expectSeed: number): Save | null {
   try {
     const raw = localStorage.getItem(SAVE_KEY)
     if (!raw) return null
     const parsed: unknown = JSON.parse(raw)
-    return isSaveV1(parsed, expectSeed) ? parsed : null
+    return readSave(parsed, expectSeed)
   } catch {
     // Corrupt or unreadable storage is the same as no save.
     return null
