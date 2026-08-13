@@ -47,9 +47,39 @@ if (report) {
 
 let last = performance.now()
 
+/**
+ * Snap each step to a whole number of display frame periods.
+ *
+ * The renderer rounds the world's position to whole device pixels, so a small
+ * error in `dt` is enough to flip that rounding and scroll the world a pixel
+ * too far or too little. Estimating the display's period from recent deltas
+ * gives a steady display a genuinely constant `dt`, and lets a dropped frame
+ * come through as exactly two periods rather than as a smear.
+ */
+const PERIOD_SAMPLES = 31
+const periods: number[] = []
+let period = 1 / 60
+
+function quantise(raw: number): number {
+  // Keep the sample only if it looks like a real frame, so a stall or a
+  // backgrounded tab cannot poison the estimate.
+  if (raw > 0.002 && raw < 0.06) {
+    periods.push(raw)
+    if (periods.length > PERIOD_SAMPLES) periods.shift()
+  }
+  if (periods.length >= 8) {
+    const sorted = [...periods].sort((a, b) => a - b)
+    // The median survives the occasional long frame that a mean would absorb.
+    period = sorted[sorted.length >> 1]!
+  }
+  // How many display frames this step really covers.
+  const steps = Math.max(1, Math.min(4, Math.round(raw / period)))
+  return steps * period
+}
+
 function frame(now: number) {
   // Clamp the step so a backgrounded tab doesn't teleport the whole world.
-  const dt = Math.min(0.05, (now - last) / 1000)
+  const dt = Math.min(0.05, quantise((now - last) / 1000))
   last = now
 
   input.sample()

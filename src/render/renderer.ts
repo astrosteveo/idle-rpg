@@ -51,22 +51,43 @@ export class Renderer {
   }
 
   resize() {
-    const dpr = Math.max(1, Math.min(2, Math.floor(window.devicePixelRatio || 1)))
+    // The real ratio, neither floored nor capped. Either one leaves the backing
+    // store smaller than the panel, and the compositor makes up the difference
+    // with a fractional bilinear upscale: standing still that softens the art,
+    // and while the world scrolls each art pixel lands on a different
+    // device-pixel phase every frame, so fine detail crawls.
+    const dpr = Math.max(1, window.devicePixelRatio || 1)
     const cssW = Math.max(320, window.innerWidth)
     const cssH = Math.max(240, window.innerHeight)
-    // Choose an integer zoom so the visible slice of world stays consistent
-    // across displays, then multiply by DPR so the blit is still 1:1.
+    // Framing is chosen in CSS space so the visible slice of world stays
+    // consistent across displays regardless of their pixel density.
     const zoom = clamp(Math.round(Math.min(cssW / 760, cssH / 440)), 1, 4)
+    // ...but the blit has to land on whole device pixels, so the art-to-device
+    // scale is rounded to an integer. On a fractional-DPR screen that shifts
+    // the slice by a few percent, which is invisible; a non-integer scale would
+    // make neighbouring art pixels cover different numbers of device pixels.
+    const scale = Math.max(1, Math.round(zoom * dpr))
+    // Device pixels actually on the panel. The canvas backing store is sized to
+    // this exactly and then given a CSS size of cssW/cssH, which is the same
+    // measurement divided back out — so the browser presents it 1:1.
+    const devW = Math.round(cssW * dpr)
+    const devH = Math.round(cssH * dpr)
+    // Two art pixels of bleed beyond what the screen needs. `render` offsets the
+    // blit by up to half an art pixel in either direction to scroll smoothly, so
+    // the buffer has to overhang the canvas on both sides or that offset would
+    // drag an uncovered edge into view.
+    const wantW = Math.ceil(devW / scale) + 2
+    const wantH = Math.ceil(devH / scale) + 2
     // Keep the buffer even in both axes. With an odd width, viewX0 lands on a
     // half pixel and Math.round flips direction depending on the camera's
     // fractional part — a guaranteed one-pixel shimmer as you walk.
-    this.vw = Math.ceil(cssW / zoom) + (Math.ceil(cssW / zoom) % 2)
-    this.vh = Math.ceil(cssH / zoom) + (Math.ceil(cssH / zoom) % 2)
-    this.scale = zoom * dpr
+    this.vw = wantW + (wantW % 2)
+    this.vh = wantH + (wantH % 2)
+    this.scale = scale
     this.buf.width = this.vw
     this.buf.height = this.vh
-    this.canvas.width = Math.floor(cssW * dpr)
-    this.canvas.height = Math.floor(cssH * dpr)
+    this.canvas.width = devW
+    this.canvas.height = devH
     this.canvas.style.width = `${cssW}px`
     this.canvas.style.height = `${cssH}px`
     this.ctx.imageSmoothingEnabled = false
@@ -77,16 +98,7 @@ export class Renderer {
     this.shake = Math.min(6, this.shake + amount)
   }
 
-  /**
-   * The camera is locked to the player rather than easing toward them.
-   *
-   * Smoothing looks tempting, but it leaves a sub-pixel offset between camera
-   * and player that changes every frame. Once the render origin is snapped to
-   * the pixel grid, that offset rounds one way and then the other, and the
-   * player visibly twitches against the ground. Locking the camera makes the
-   * player's screen position mathematically constant, so the world scrolls
-   * cleanly underneath them.
-   */
+  /** Locked to the player, not eased, so the world scrolls under a fixed sprite. */
   updateCamera(dt: number) {
     const p = this.game.player
     this.camX = p.x
@@ -110,8 +122,15 @@ export class Renderer {
   render(time: number) {
     const g = this.game
     const ctx = this.bctx
-    const ox = Math.round(this.viewX0 + (this.shake ? (hash2(time * 60, 1) - 0.5) * this.shake : 0))
-    const oy = Math.round(this.viewY0 + (this.shake ? (hash2(2, time * 60) - 0.5) * this.shake : 0))
+    // Where the view really is, before the grid snap.
+    const fx = this.viewX0 + (this.shake ? (hash2(time * 60, 1) - 0.5) * this.shake : 0)
+    const fy = this.viewY0 + (this.shake ? (hash2(2, time * 60) - 0.5) * this.shake : 0)
+    // Everything inside the buffer is drawn against a whole-art-pixel origin —
+    // that snap is what keeps the low-res art crisp and stops the player sliding
+    // against the ground. The fraction it discards is not thrown away though;
+    // the blit below re-applies it at display resolution.
+    const ox = Math.round(fx)
+    const oy = Math.round(fy)
 
     this.drawTerrain(ctx, ox, oy)
     this.drawCampAuras(ctx, ox, oy)
@@ -127,14 +146,22 @@ export class Renderer {
     }
 
     this.ctx.imageSmoothingEnabled = false
+    // Sub-pixel scroll. Snapping the origin quantises the world's motion to
+    // whole art pixels, so when the player moves less than one per frame the
+    // world stalls and then jumps. Handing the discarded fraction to the blit
+    // spends it at device resolution instead, the finest step the screen can
+    // show. One art pixel of the bleed sits off the left/top edge so either
+    // sign of the offset stays covered.
+    const dx = -this.scale - Math.round((fx - ox) * this.scale)
+    const dy = -this.scale - Math.round((fy - oy) * this.scale)
     this.ctx.drawImage(
       this.buf,
       0,
       0,
       this.vw,
       this.vh,
-      0,
-      0,
+      dx,
+      dy,
       this.vw * this.scale,
       this.vh * this.scale,
     )
