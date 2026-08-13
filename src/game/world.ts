@@ -60,7 +60,12 @@ export interface Camp {
   x: number
   y: number
   radius: number
-  discovered: boolean
+  /**
+   * Placement data only — whether a camp is *known* is per-player progress and
+   * lives on `Game.discovered`. Keeping it here would make one player's
+   * exploration everyone's the moment the world is shared.
+   */
+  startDiscovered: boolean
 }
 
 export interface SpawnNode {
@@ -133,6 +138,11 @@ export const REGIONS: Region[] = [
   },
 ]
 
+/** The level a region is reckoned at — the middle of its band. */
+export function groundLevelOf(r: Region): number {
+  return Math.round((r.levelMin + r.levelMax) / 2)
+}
+
 export const WILDS: Region = {
   id: 'wilds',
   name: 'The Open Wilds',
@@ -150,9 +160,9 @@ export const WILDS: Region = {
 }
 
 export const CAMPS: Camp[] = [
-  { id: 'hearthglen', name: 'Hearthglen Camp', x: 2400, y: 3660, radius: 250, discovered: true },
-  { id: 'rangers', name: "Ranger's Rest", x: 3420, y: 2440, radius: 235, discovered: false },
-  { id: 'stonewatch', name: 'Stonewatch Hold', x: 1520, y: 2380, radius: 235, discovered: false },
+  { id: 'hearthglen', name: 'Hearthglen Camp', x: 2400, y: 3660, radius: 250, startDiscovered: true },
+  { id: 'rangers', name: "Ranger's Rest", x: 3420, y: 2440, radius: 235, startDiscovered: false },
+  { id: 'stonewatch', name: 'Stonewatch Hold', x: 1520, y: 2380, radius: 235, startDiscovered: false },
 ]
 
 /** Roads connect the camps; they carve dirt tiles and keep spawns at bay. */

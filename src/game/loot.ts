@@ -12,6 +12,19 @@ import type { Item, ItemStats } from './types'
 
 let nextUid = 1
 
+/**
+ * Item uids must not restart at 1 when a save is loaded, or the first fresh drop
+ * collides with gear the player is already wearing — equip, sell and tooltips all
+ * key off uid. Saves carry the high-water mark and restore it before play begins.
+ */
+export function uidMark(): number {
+  return nextUid
+}
+
+export function restoreUidMark(n: number) {
+  if (Number.isFinite(n) && n > nextUid) nextUid = Math.floor(n)
+}
+
 export function baseById(id: string): ItemBase {
   return ITEM_BASES.find((b) => b.id === id) ?? ITEM_BASES[0]!
 }

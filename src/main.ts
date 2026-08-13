@@ -1,14 +1,29 @@
 import { Input } from './core/input'
+import { rng } from './core/math'
+import { runOfflineLedger, type OfflineReport } from './game/offline'
 import { Game } from './game/state'
 import { World } from './game/world'
 import { buildArt } from './render/sprites'
 import { Renderer } from './render/renderer'
 import { UI } from './ui/ui'
+import { installAutosave, loadSave } from './ui/storage'
 
 const canvas = document.getElementById('game') as HTMLCanvasElement
 
 const art = buildArt()
-const game = new Game(new World())
+const world = new World()
+const game = new Game(world)
+
+const save = loadSave(world.seed)
+let report: OfflineReport | null = null
+if (save) {
+  game.hydrate(save)
+  // Settle the absence before the first frame, so the HUD never shows stale
+  // numbers that jump a moment later.
+  report = runOfflineLedger(save, Date.now(), rng((save.savedAt ^ 0x51ed270b) >>> 0))
+  if (report) game.applyOfflineReport(report)
+}
+installAutosave(game)
 const renderer = new Renderer(canvas, game, art)
 const ui = new UI(game, renderer)
 const input = new Input(ui.stickZone, ui.stick)
@@ -20,10 +35,15 @@ const input = new Input(ui.stickZone, ui.stick)
 window.addEventListener('resize', () => renderer.resize())
 window.addEventListener('orientationchange', () => renderer.resize())
 
-ui.log('Welcome to the Wildmarch.', '#f2c14e')
-ui.log('WASD or drag the left half of the screen to move.')
-ui.log('Space toggles auto-battle. Q and E are your abilities.')
-ui.banner('Hearthglen Camp', 'Greenwood Vale')
+if (report) {
+  ui.showReport(report)
+  ui.log(`Returned from ${report.groundName}.`, '#f2c14e')
+} else {
+  ui.log('Welcome to the Wildmarch.', '#f2c14e')
+  ui.log('WASD or drag the left half of the screen to move.')
+  ui.log('Space toggles auto-battle. Q and E are your abilities.')
+  ui.banner('Hearthglen Camp', 'Greenwood Vale')
+}
 
 let last = performance.now()
 

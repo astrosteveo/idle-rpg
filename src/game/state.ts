@@ -23,12 +23,27 @@ import {
   WHIRLWIND,
   deriveStats,
   mitigate,
+  rewardScale,
   xpForLevel,
+  xpScale,
   type DerivedStats,
   type QuestReward,
 } from './content'
-import { itemScore, makeItem, sumStats } from './loot'
-import { CAMPS, TILE, World, WORLD_SIZE, type Camp, type SpawnNode } from './world'
+import { itemScore, makeItem, restoreUidMark, sumStats, uidMark } from './loot'
+import type { OfflineReport } from './offline'
+import { SAVE_VERSION, type SaveV1 } from './save'
+import {
+  CAMPS,
+  REGIONS,
+  TILE,
+  World,
+  WORLD_SIZE,
+  groundLevelOf,
+  type BiomeId,
+  type Camp,
+  type Region,
+  type SpawnNode,
+} from './world'
 import {
   SLOTS,
   type Ability,
@@ -105,7 +120,17 @@ export class Game {
   questIndex = 0
   questProgress = 0
   claimed = new Set<string>()
+  /** Camps this character has found. Per-player progress, never world state. */
+  discovered = new Set<string>(CAMPS.filter((c) => c.startDiscovered).map((c) => c.id))
   autoEquip = true
+  /** Where this character hunts while its player is away. */
+  huntingGround: BiomeId | null = null
+  /**
+   * True once the player has chosen a ground deliberately. Until then it simply
+   * follows wherever they are, so someone who never opens the Hunt tab still
+   * earns from somewhere sensible.
+   */
+  groundPinned = false
   time = 0
   currentCamp: Camp | null = null
   hooks: GameHooks = { log: () => {}, banner: () => {}, dirty: () => {} }
@@ -153,6 +178,157 @@ export class Game {
     this.player.hp = this.stats.maxHp
     // Seed the world so the first screen isn't empty while nodes warm up.
     for (const node of this.world.nodes) this.fillNode(node, true)
+  }
+
+  /* ================= persistence ================= */
+
+  serialize(): SaveV1 {
+    const p = this.player
+    return {
+      v: SAVE_VERSION,
+      seed: this.world.seed,
+      savedAt: Date.now(),
+      player: {
+        x: p.x,
+        y: p.y,
+        level: p.level,
+        xp: p.xp,
+        xpNext: p.xpNext,
+        str: p.str,
+        vit: p.vit,
+        agi: p.agi,
+        hp: p.hp,
+        gold: p.gold,
+        auto: p.auto,
+      },
+      bag: this.bag.slice(),
+      equipped: { ...this.equipped },
+      nextUid: uidMark(),
+      counters: { ...this.counters },
+      questIndex: this.questIndex,
+      questProgress: this.questProgress,
+      claimed: [...this.claimed],
+      discovered: [...this.discovered],
+      huntingGround: this.huntingGround,
+      groundPinned: this.groundPinned,
+      autoEquip: this.autoEquip,
+    }
+  }
+
+  /**
+   * Applied on top of a freshly constructed game, so the world is already
+   * generated and every spawn node already full. Only the character is restored.
+   */
+  hydrate(s: SaveV1) {
+    const p = this.player
+    p.x = s.player.x
+    p.y = s.player.y
+    p.level = s.player.level
+    p.xp = s.player.xp
+    p.xpNext = s.player.xpNext
+    p.str = s.player.str
+    p.vit = s.player.vit
+    p.agi = s.player.agi
+    p.gold = s.player.gold
+    p.auto = s.player.auto
+
+    for (let i = 0; i < BAG_SIZE; i++) this.bag[i] = s.bag[i] ?? null
+    for (const slot of SLOTS) this.equipped[slot] = s.equipped[slot] ?? null
+    // Before any fresh drop is rolled, or new uids collide with restored gear.
+    restoreUidMark(s.nextUid)
+
+    this.counters = { ...s.counters }
+    this.questIndex = s.questIndex
+    this.questProgress = s.questProgress
+    this.claimed = new Set(s.claimed)
+    this.discovered = new Set(s.discovered)
+    this.huntingGround = s.huntingGround
+    this.groundPinned = s.groundPinned ?? false
+    this.autoEquip = s.autoEquip
+
+    // The loot stream is fixed-seed and its position is not recoverable from the
+    // closure, so reseed it. Without this every session rolls the same sequence
+    // of drops from the top.
+    this.rand = rng((s.savedAt ^ 0x9e3779b1) >>> 0)
+
+    this.recalc()
+    // Transient combat state is never saved; a character mid-death returns whole.
+    p.hp = s.player.hp > 0 ? Math.min(s.player.hp, this.stats.maxHp) : this.stats.maxHp
+    p.alive = true
+    p.deadT = 0
+    p.targetId = -1
+    p.invuln = 0
+    p.vx = 0
+    p.vy = 0
+    p.swingT = 0
+    p.hitFlash = 0
+  }
+
+  /* ================= hunting grounds ================= */
+
+  /**
+   * A ground is assignable when it is within the same +2 band `rewardScale` pays
+   * full value for. One rule governs both, so a ground you are allowed to pick is
+   * exactly a ground worth hunting.
+   */
+  isGroundEligible(r: Region): boolean {
+    return r.kind !== null && r.levelMin - 2 <= this.player.level
+  }
+
+  eligibleGrounds(): Region[] {
+    return REGIONS.filter((r) => this.isGroundEligible(r))
+  }
+
+  /**
+   * True once a ground pays no experience at all. It stays huntable — the gold
+   * and the gear are still real — but it can no longer level anyone.
+   */
+  isGroundOutgrown(r: Region): boolean {
+    return r.kind !== null && xpScale(this.player.level, groundLevelOf(r)) <= 0
+  }
+
+  setHuntingGround(id: BiomeId | null) {
+    this.huntingGround = id
+    this.groundPinned = id !== null
+    this.hooks.dirty()
+  }
+
+  /**
+   * Follow the player while unpinned. Outgrown ground is skipped: walking home
+   * through the vale at level 11 should not silently reassign a character to a
+   * region that can no longer level it.
+   */
+  private trackGround() {
+    if (this.groundPinned) return
+    const r = this.world.regionAt(this.player.x, this.player.y)
+    if (this.isGroundEligible(r) && !this.isGroundOutgrown(r)) this.huntingGround = r.id
+  }
+
+  /**
+   * Settle an offline run. Kills earned while away are real kills: they feed
+   * counters, milestones and any kill-objective quest, exactly as they would
+   * have at the keyboard.
+   */
+  applyOfflineReport(r: OfflineReport) {
+    this.counters.kills += r.kills
+    this.counters[r.kind] += r.kills
+    this.counters.elite += r.eliteKills
+
+    const q = this.quest
+    if (q && q.objective.type === 'kill') {
+      const want = q.objective.kind
+      const credited =
+        want === 'any' ? r.kills : want === 'elite' ? r.eliteKills : want === r.kind ? r.kills : 0
+      if (credited > 0) {
+        this.questProgress += credited
+        if (this.questProgress >= q.objective.count) this.completeQuest()
+      }
+    }
+
+    this.gainXp(r.xp, true)
+    this.gainGold(r.gold)
+    for (const item of r.items) this.addItem(item)
+    this.hooks.dirty()
   }
 
   /* ================= derived stats ================= */
@@ -246,7 +422,8 @@ export class Game {
     }
 
     this.currentCamp = this.world.campAt(p.x, p.y)
-    if (this.currentCamp && !this.currentCamp.discovered) this.discoverCamp(this.currentCamp)
+    if (this.currentCamp && !this.isDiscovered(this.currentCamp)) this.discoverCamp(this.currentCamp)
+    this.trackGround()
 
     if (p.auto) this.stepAuto(dt)
     else this.stepManual(dt, moveX, moveY)
@@ -680,6 +857,11 @@ export class Game {
     }
   }
 
+  /**
+   * The world half of a kill: the bookkeeping every observer of a shared world
+   * would agree on, and which must happen exactly once no matter how many
+   * players landed a hit. Grants nothing — rewards live in `creditKill`.
+   */
   private killEnemy(e: Enemy) {
     e.alive = false
     e.hp = 0
@@ -711,22 +893,41 @@ export class Game {
       node.respawnAt = this.time + (e.elite ? 45 : 9 + this.rand() * 8)
     }
 
+    this.creditKill(e)
+    this.hooks.dirty()
+  }
+
+  /**
+   * The private half of a kill: everything owned by one character rather than by
+   * the world. Split out from `killEnemy` because credit is universal — every
+   * player who damaged the beast earns the full amount, so once the world is
+   * shared this runs once per contributor while the bookkeeping above runs once.
+   *
+   * (Today there is one player, and `gainXp`/`gainGold`/`addItem` all write to
+   * `this.player`. Taking a player argument here would only pretend to credit
+   * someone else, so the loop lands with the player registry, not before it.)
+   */
+  private creditKill(e: Enemy) {
+    // Acknowledgment is unconditional; only the payout scales.
     this.counters.kills++
     this.counters[e.kind]++
     if (e.elite) this.counters.elite++
-
-    this.gainGold(e.goldValue)
-    this.gainXp(e.xpValue)
-    this.rollDrop(e)
     this.advanceQuestOnKill(e)
-    this.hooks.dirty()
+
+    // Gold and drops keep the floored curve — a trivial beast is still worth
+    // looting. Experience alone can reach zero, so a region can be outgrown.
+    const scale = rewardScale(this.player.level, e.level)
+    const xps = xpScale(this.player.level, e.level)
+    this.gainGold(Math.max(1, Math.round(e.goldValue * scale)))
+    if (xps > 0) this.gainXp(Math.max(1, Math.round(e.xpValue * xps)))
+    this.rollDrop(e, scale)
   }
 
   /* ================= loot & progression ================= */
 
-  private rollDrop(e: Enemy) {
+  private rollDrop(e: Enemy, scale = 1) {
     const type = ENEMIES[e.kind]
-    const chance = e.elite ? ELITE.dropChance : type.dropChance
+    const chance = (e.elite ? ELITE.dropChance : type.dropChance) * scale
     if (this.rand() > chance) return
     const rarity = Math.min(
       4,
@@ -737,7 +938,11 @@ export class Game {
           (this.rand() < 0.16 ? 1 : 0),
       ),
     )
-    const item = makeItem(this.rand, Math.max(1, e.level + this.rand.int(-1, 2)), rarity)
+    // Item level slides from the beast's level toward the player's own as the
+    // gap widens, so a lucky tap on something far above you still yields gear
+    // you could have earned rather than a jackpot.
+    const ilvl = e.level * scale + this.player.level * (1 - scale)
+    const item = makeItem(this.rand, Math.max(1, Math.round(ilvl) + this.rand.int(-1, 2)), rarity)
     this.addItem(item)
   }
 
@@ -811,7 +1016,9 @@ export class Game {
     this.counters.gold += amount
   }
 
-  gainXp(amount: number) {
+  /** `quiet` suppresses the per-level banner and flourish — used when settling
+   *  an offline run, where several levels land at once and the report says so. */
+  gainXp(amount: number, quiet = false) {
     const p = this.player
     p.xp += amount
     while (p.xp >= p.xpNext) {
@@ -823,6 +1030,7 @@ export class Game {
       p.xpNext = xpForLevel(p.level)
       this.recalc()
       p.hp = p.maxHp
+      if (quiet) continue
       this.hooks.banner(`Level ${p.level}`, '+2 Strength  +2 Vitality  +1 Agility')
       this.effects.push({
         kind: 'ring',
@@ -860,8 +1068,12 @@ export class Game {
     if (this.questProgress >= q.objective.count) this.completeQuest()
   }
 
+  isDiscovered(camp: Camp): boolean {
+    return this.discovered.has(camp.id)
+  }
+
   private discoverCamp(camp: Camp) {
-    camp.discovered = true
+    this.discovered.add(camp.id)
     this.hooks.banner('Camp Discovered', camp.name)
     this.hooks.log(`Discovered ${camp.name}`, '#f2c14e')
     const q = this.quest
@@ -993,7 +1205,7 @@ export class Game {
     let camp = CAMPS[0]!
     let best = Infinity
     for (const c of CAMPS) {
-      if (!c.discovered) continue
+      if (!this.isDiscovered(c)) continue
       const d = dist(p.x, p.y, c.x, c.y)
       if (d < best) {
         best = d

@@ -139,6 +139,98 @@ export const ELITE = {
 }
 
 /* ------------------------------------------------------------------ *
+ * Reward scaling
+ * ------------------------------------------------------------------ */
+
+/**
+ * Everyone who damages a beast earns full credit for the kill — never a split
+ * share, never a race to tag it first. What scales is the *value* of that
+ * credit, by the gap between the two levels, so a low-level character cannot
+ * tap high-level beasts into free progress.
+ *
+ * The multiplier depends only on the two levels, so no faster, earlier or
+ * harder action improves it: there is nothing to race. Full value within +2
+ * (punching up a little should stay worth it), then a steep taper to a floor;
+ * a gentler taper downward keeps high-level players from farming the starter
+ * regions for gold.
+ *
+ * Applies to xp, gold, drop chance and drop item level. It must NEVER touch
+ * kill counters, bestiary entries or quest progress — that acknowledgment is
+ * unconditional, and has no economic value to exploit.
+ */
+export function rewardScale(playerLevel: number, enemyLevel: number): number {
+  const d = enemyLevel - playerLevel
+  if (d > 2) return Math.max(0.04, 1 - (d - 2) * 0.22)
+  if (d < -4) return Math.max(0.15, 1 + (d + 4) * 0.12)
+  return 1
+}
+
+/**
+ * Experience alone falls all the way to nothing, so a region can be *outgrown*
+ * rather than merely made unrewarding. `rewardScale` floors at 15% and never
+ * reaches zero, which is right for gold and drops — trivial beasts should still
+ * be worth looting — but it would let a character grind the starter vale to the
+ * level cap forever.
+ *
+ * Tuned against the region bands: at `cutoff` 8, a level 11 character earns
+ * nothing from Greenwood Vale (levels 1–3) but is still paid properly in
+ * Wolfden Thicket (4–8). Punching upward is unchanged — that curve belongs to
+ * `rewardScale`, which also guards against tapping high-level beasts.
+ *
+ * Kills, quests, counters and the bestiary are never affected. Acknowledgment
+ * stays unconditional; only the payout stops.
+ */
+export const XP_FALLOFF = {
+  /** Full experience while the beast is within this many levels below you. */
+  grace: 3,
+  /** Experience reaches exactly zero this many levels below you. */
+  cutoff: 8,
+}
+
+export function xpScale(playerLevel: number, enemyLevel: number): number {
+  const d = enemyLevel - playerLevel
+  if (d >= 0) return rewardScale(playerLevel, enemyLevel)
+  const below = -d
+  if (below <= XP_FALLOFF.grace) return 1
+  if (below >= XP_FALLOFF.cutoff) return 0
+  return (XP_FALLOFF.cutoff - below) / (XP_FALLOFF.cutoff - XP_FALLOFF.grace)
+}
+
+/* ------------------------------------------------------------------ *
+ * Offline progression
+ * ------------------------------------------------------------------ */
+
+/**
+ * The ledger is a closed-form rate model, not a headless simulation — it has to
+ * settle months of absence in a frame. It is deliberately an approximation, and
+ * these are the knobs that make it honest.
+ */
+export const OFFLINE = {
+  /** Accrual stops here. Long enough to cover a night's sleep and a workday. */
+  capHours: 12,
+  /** Walking between bodies, per kill. */
+  seekSeconds: 2.5,
+  /** Healing, deaths, pathing, waiting on respawns. */
+  efficiency: 0.72,
+  /** Arc melee cleaves, and wolves come in packs where bears do not. */
+  cleave: { wolf: 1.45, bear: 1.1 } as Record<EnemyKind, number>,
+  /**
+   * Rewards depend on level, so the run is stepped and stats recomputed between
+   * buckets. Without this a level 1 character earns level 1 rates all night when
+   * it would really have hit level 6 in the first hour.
+   */
+  bucketSeconds: 600,
+  /** Share of kills that are elites, in regions that have elite nodes. */
+  eliteShare: 0.06,
+  /** Best few drops are kept; the rest become gold, as bag overflow already does. */
+  maxItemsKept: 6,
+  /** Upper bound on items actually generated, so a long absence stays cheap. */
+  itemSampleCap: 24,
+  /** Shorter absences than this are not worth interrupting the player for. */
+  minReportSeconds: 120,
+}
+
+/* ------------------------------------------------------------------ *
  * Items
  * ------------------------------------------------------------------ */
 

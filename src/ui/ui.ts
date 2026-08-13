@@ -6,16 +6,29 @@
  * panels only rebuild when the game marks itself dirty or a panel is opened.
  */
 import { clamp } from '../core/math'
-import { MILESTONES, QUESTS, RARITY_COLORS } from '../game/content'
+import { ENEMIES, MILESTONES, QUESTS, RARITY_COLORS } from '../game/content'
 import { itemScore, rarityName, statLines } from '../game/loot'
 import type { Game } from '../game/state'
 import { SLOTS, SLOT_LABEL, type Item } from '../game/types'
 import type { QuestObjective } from '../game/content'
-import { CAMPS, MAP_TILES, WORLD_SIZE } from '../game/world'
+import { CAMPS, MAP_TILES, REGIONS, WORLD_SIZE, groundLevelOf } from '../game/world'
+import { killsPerHour, type OfflineReport } from '../game/offline'
+import { OFFLINE } from '../game/content'
 import type { Renderer } from '../render/renderer'
 import { abilityIcon, itemIcon } from '../render/sprites'
 
-type Tab = 'bag' | 'quests' | 'rewards'
+type Tab = 'bag' | 'quests' | 'rewards' | 'hunt'
+
+const TABS: Tab[] = ['bag', 'quests', 'rewards', 'hunt']
+
+/** "4h 12m", "18m" — the report and the Hunt tab both read better than seconds. */
+function duration(seconds: number): string {
+  const h = Math.floor(seconds / 3600)
+  const m = Math.round((seconds % 3600) / 60)
+  if (h && m) return `${h}h ${m}m`
+  if (h) return `${h}h`
+  return `${Math.max(1, m)}m`
+}
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -57,6 +70,7 @@ export class UI {
   private badges: Record<string, HTMLElement> = {}
   private tip!: HTMLElement
   private death!: HTMLElement
+  private report!: HTMLElement
 
   private tab: Tab = 'bag'
   private open = false
@@ -77,6 +91,7 @@ export class UI {
     this.buildPanel()
     this.buildTooltip()
     this.buildDeath()
+    this.buildReport()
     const zone = el('div')
     zone.id = 'stickzone'
     const stick = el('div')
@@ -184,6 +199,7 @@ export class UI {
     mk('Bag', 'I', 'bag', 'bag')
     mk('Tasks', 'J', 'quests')
     mk('Rewards', 'R', 'rewards', 'rewards')
+    mk('Hunt', 'H', 'hunt')
 
     wrap.append(abilities, menu)
     this.root.appendChild(wrap)
@@ -224,6 +240,7 @@ export class UI {
     mkTab('bag', 'Inventory')
     mkTab('quests', 'Tasks')
     mkTab('rewards', 'Rewards')
+    mkTab('hunt', 'Hunt')
     const close = el('button', 'btn p-close')
     close.textContent = 'Close'
     close.addEventListener('click', () => this.hide())
@@ -250,6 +267,82 @@ export class UI {
     this.death = d
   }
 
+  private buildReport() {
+    const d = el('div')
+    d.id = 'report'
+    this.root.appendChild(d)
+    this.report = d
+  }
+
+  /**
+   * The most-read screen in an idle game — a log of the hunt, not a receipt.
+   * Shown once on load when the ledger found something worth reporting.
+   */
+  showReport(r: OfflineReport) {
+    const type = ENEMIES[r.kind]
+    const levels = r.levelTo - r.levelFrom
+    const inner = el('div', 'r-in frame')
+
+    inner.appendChild(
+      el(
+        'div',
+        'r-head',
+        `<span class="r-eyebrow">While you were away</span>
+         <h2>${duration(r.creditedSeconds)} in ${r.groundName}</h2>`,
+      ),
+    )
+
+    if (r.capped) {
+      inner.appendChild(
+        el(
+          'div',
+          'r-capped',
+          `You were gone ${duration(r.elapsedSeconds)}. A hunt pays out its first
+           ${OFFLINE.capHours} hours.`,
+        ),
+      )
+    }
+
+    const rows: string[] = [`<div><span>Beasts slain</span><b>${r.kills.toLocaleString()}</b></div>`]
+    if (r.eliteKills > 0) {
+      rows.push(`<div><span>${type.eliteName}s</span><b>${r.eliteKills}</b></div>`)
+    }
+    rows.push(`<div><span>Experience</span><b>${r.xp.toLocaleString()}</b></div>`)
+    if (levels > 0) {
+      rows.push(`<div><span>Levels</span><b>${r.levelFrom} → ${r.levelTo}</b></div>`)
+    }
+    rows.push(`<div><span>Gold</span><b>${r.gold.toLocaleString()}</b></div>`)
+    if (r.soldCount > 0) {
+      rows.push(`<div><span>Sold in the field</span><b>${r.soldCount}</b></div>`)
+    }
+    inner.appendChild(el('div', 'r-stats', rows.join('')))
+
+    if (r.items.length) {
+      const loot = el('div', 'r-loot')
+      loot.appendChild(el('div', 'col-h', 'Brought home'))
+      for (const it of r.items) {
+        loot.appendChild(
+          el(
+            'div',
+            'r-item',
+            `<b style="color:${RARITY_COLORS[it.rarity]}">${it.name}</b>
+             <span>ilvl ${it.ilvl}</span>`,
+          ),
+        )
+      }
+      inner.appendChild(loot)
+    }
+
+    const btn = el('button', 'btn')
+    btn.textContent = 'Back to the march'
+    btn.addEventListener('click', () => this.report.classList.remove('show'))
+    inner.appendChild(btn)
+
+    this.report.innerHTML = ''
+    this.report.appendChild(inner)
+    this.report.classList.add('show')
+  }
+
   /* ================= interaction ================= */
 
   private onKey = (e: KeyboardEvent) => {
@@ -257,6 +350,7 @@ export class UI {
     if (k === 'i') this.toggle('bag')
     else if (k === 'j') this.toggle('quests')
     else if (k === 'r') this.toggle('rewards')
+    else if (k === 'h') this.toggle('hunt')
     else if (k === 'escape') this.hide()
     else if (k === 'q') this.game.useAbility('whirlwind')
     else if (k === 'e') this.game.useAbility('secondwind')
@@ -290,7 +384,7 @@ export class UI {
     this.tab = tab
     this.open = true
     this.panel.classList.add('open')
-    for (const id of ['bag', 'quests', 'rewards'] as Tab[]) {
+    for (const id of TABS) {
       this.tabs[id].classList.toggle('sel', id === tab)
     }
     this.needsPanel = true
@@ -435,7 +529,7 @@ export class UI {
     for (const c of CAMPS) {
       const cx = Math.round(c.x * k)
       const cy = Math.round(c.y * k)
-      ctx.fillStyle = c.discovered ? '#f2c14e' : '#6d7383'
+      ctx.fillStyle = g.isDiscovered(c) ? '#f2c14e' : '#6d7383'
       ctx.fillRect(cx - 3, cy - 3, 6, 6)
       ctx.fillStyle = '#12151d'
       ctx.fillRect(cx - 1, cy - 1, 2, 2)
@@ -457,7 +551,69 @@ export class UI {
     body.innerHTML = ''
     if (this.tab === 'bag') this.renderBag(body)
     else if (this.tab === 'quests') this.renderQuests(body)
+    else if (this.tab === 'hunt') this.renderHunt(body)
     else this.renderRewards(body)
+  }
+
+  private renderHunt(body: HTMLElement) {
+    const g = this.game
+    const wrap = el('div', 'hunt-wrap')
+
+    const intro = el('div', 'hunt-intro')
+    intro.innerHTML = `Your character keeps hunting while you are away, up to
+      <b>${OFFLINE.capHours} hours</b>. Pick where — or leave it unpinned and it
+      follows wherever you go.`
+    wrap.appendChild(intro)
+
+    for (const r of REGIONS) {
+      if (!r.kind) continue
+      const eligible = g.isGroundEligible(r)
+      const outgrown = eligible && g.isGroundOutgrown(r)
+      const active = g.huntingGround === r.id
+      const card = el('div', 'ground')
+      card.classList.toggle('sel', active)
+      card.classList.toggle('locked', !eligible)
+      card.classList.toggle('outgrown', outgrown)
+
+      const rate = eligible ? killsPerHour(g.stats, r.kind, groundLevelOf(r)) : 0
+      const beast = r.kind === 'wolf' ? 'Wolves' : 'Bears'
+      const elites = r.eliteNodes > 0 ? ' and their elites' : ''
+
+      const head = el('div', 'g-head')
+      head.innerHTML = `<b style="color:${r.color}">${r.name}</b>
+        <span>Levels ${r.levelMin}–${r.levelMax}</span>`
+      const desc = el('div', 'g-desc', `${beast}${elites}.`)
+      const stat = el('div', 'g-stat')
+      if (!eligible) {
+        stat.innerHTML = `<span class="locked-note">Too dangerous below level ${r.levelMin - 2}.</span>`
+      } else if (outgrown) {
+        stat.innerHTML = `Roughly <b>${Math.round(rate)}</b> kills an hour —
+          <span class="outgrown-note">but you have outgrown it. Gold and gear only,
+          no experience.</span>`
+      } else {
+        stat.innerHTML = `Roughly <b>${Math.round(rate)}</b> kills an hour at your current gear.`
+      }
+
+      const btn = el('button', 'btn')
+      btn.textContent = active ? (g.groundPinned ? 'Assigned' : 'Following you') : 'Hunt here'
+      btn.classList.toggle('on', active)
+      btn.disabled = !eligible
+      btn.addEventListener('click', () => {
+        g.setHuntingGround(active && g.groundPinned ? null : r.id)
+        this.renderPanel()
+      })
+
+      card.append(head, desc, stat, btn)
+      wrap.appendChild(card)
+    }
+
+    const note = el('div', 'hunt-intro')
+    note.innerHTML = g.groundPinned
+      ? `Assigned deliberately. Press the assigned ground again to unpin it.`
+      : `Unpinned — following you. Choose a ground to hold it there.`
+    wrap.appendChild(note)
+
+    body.appendChild(wrap)
   }
 
   private renderBag(body: HTMLElement) {

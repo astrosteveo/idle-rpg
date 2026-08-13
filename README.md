@@ -29,6 +29,7 @@ npm run preview  # serve the production build
 | Inventory | `I` | **Bag** |
 | Tasks | `J` | **Tasks** |
 | Rewards | `R` | **Rewards** |
+| Hunting grounds | `H` | **Hunt** |
 | Toggle auto-equip | `F` | Button inside the Inventory panel |
 | Close a panel | `Esc` | **Close** |
 
@@ -60,6 +61,14 @@ disengages within about seven seconds of walking away.)
 inside it — plus Whirlwind (AoE burst) and Second Wind (heal). Crits, armour
 mitigation with diminishing returns, and floating damage numbers.
 
+**Outgrowing a region.** Experience falls to exactly zero eight levels above a
+beast, so no region can be ground forever — a level 11 character earns nothing
+from Greenwood Vale but is still paid properly in Wolfden Thicket. Gold and
+drops keep a separate, gentler curve that floors at 15%: trivial beasts are
+still worth looting, they just cannot level you. Kills, quests, counters and
+milestones are never affected — only the payout stops. See `xpScale` and
+`rewardScale` in `content.ts`.
+
 **Auto-battle.** Seeks the nearest valid target, closes to swing range, holds
 position while attacking, fires Whirlwind when two or more beasts are in reach,
 drinks Second Wind below 45% health, and walks to the nearest populated den when
@@ -80,6 +89,19 @@ kills, elites, gold earned, level and quests completed. They sit in the Rewards
 panel with a badge on the button when something is ready, and you press **Claim**
 to take the payout.
 
+**Persistence and offline progress.** The character is saved to local storage on
+a timer and whenever the page is hidden or closed, and picks up where it left
+off. While you are away it keeps hunting a **hunting ground** — pick one in the
+Hunt tab, or leave it unpinned and it follows wherever you go. Coming back
+settles the absence and opens a log of the hunt: time, ground, kills, levels,
+gold and the best drops it brought home. Accrual pays out the first 12 hours.
+
+The ledger is a closed-form rate model rather than a headless simulation — it
+has to settle twelve hours in a frame — and it runs in ten-minute buckets so a
+character that would have levelled during the night earns at the new rate for
+the rest of it. It lives in `game/offline.ts` as a pure function of a save and
+an elapsed time, with every constant in `OFFLINE` in `content.ts`.
+
 ## How it is put together
 
 ```
@@ -94,6 +116,8 @@ src/
     world.ts            terrain sampling, regions, camps, roads, spawn nodes, props
     state.ts            the simulation: AI, leashing, combat, loot, progression
     loot.ts             item generation, scoring, stat rollup
+    save.ts             save schema and version — pure data, no storage
+    offline.ts          the offline ledger — pure (save, elapsed) → report
   render/
     pixel.ts            pixel-art drawing surface + sheet builder + outliner
     sprites.ts          every sprite in the game, generated parametrically
@@ -102,6 +126,7 @@ src/
     renderer.ts         camera, layers, y-sorting, effects
   ui/
     ui.ts               HUD overlay: bars, minimap, panels, tooltips
+    storage.ts          the only file that knows persistence is a browser feature
 ```
 
 Two decisions shape most of the rest:
@@ -137,7 +162,16 @@ level bands, pack sizes and node counts are the `REGIONS` array in
 
 ## Deliberately not in this slice
 
-No persistence — reloading starts a fresh run — and no offline progression;
-"idle" here means the auto-battle loop, per the agreed scope. One class
-(Warrior), two enemy species plus their elite variants, no vendors, no crafting,
-no sound.
+One class (Warrior), two enemy species plus their elite variants, no vendors, no
+crafting, no sound. Saves are local only — there is no server, and no multiplayer.
+
+**Known balance gap.** The offline ledger is faithful to live play (about two
+thirds of the measured hands-on kill rate), but the XP curve was tuned for short
+sessions: four hours in the *starter* region takes a level 2 character to level
+18. With `xpScale` in place the world runs out of levelling ground at about 16 —
+every region is outgrown by then — so a single night away can strand a character
+above all of its content. The XP cutoff is correctly tuned for levels 1–15; it
+is the accrual rate that overshoots. Extending the level range, steepening
+`xpForLevel`, or lowering `OFFLINE.efficiency` so offline deliberately trails
+live play are all one-line changes in `content.ts` — but which one is a design
+decision, not a bug fix.

@@ -46,6 +46,22 @@ found in this codebase (upside-down tents, a gold blob over an enemy, terrain
 checkerboarding) were only visible in an image, not in state. Put scratch scripts and
 screenshots in the session scratchpad, not the repo.
 
+Two things about probes now that the game persists. **Clear storage first**, or a "fresh"
+run silently inherits a levelled character:
+
+```js
+await page.evaluate(() => localStorage.clear())
+await page.reload({ waitUntil: 'networkidle' })
+```
+
+And `pagehide` writes a save on the way out, so a save backdated from inside the page is
+clobbered by the very reload meant to read it. Backdate with `page.addInitScript(...)`
+instead, which runs before the app boots.
+
+Quiesce before comparing state across a reload: auto-battle is persisted and resumes
+instantly, so a naive before/after snapshot diverges. Turn auto off and stand in a camp —
+camps make every beast give up the chase.
+
 ## Load-bearing invariants
 
 These are the things that break subtly if changed without understanding why they are the
@@ -71,9 +87,38 @@ aggro-ranges behind, or the player enters a camp. This is the rule that makes th
 traversable without monster trains — verify it still holds after touching AI, camera, or
 the loop order.
 
-**Spawn nodes own enemy lifecycle.** Every enemy belongs to a `SpawnNode` and carries its
-`nodeId`. `Game.killEnemy` must remove the id from `node.alive` and set `node.respawnAt`,
-or that node silently stops repopulating.
+**A kill has two halves, split on purpose.** `Game.killEnemy` is the *world* half — corpse,
+effect, and returning the enemy's slot to its `SpawnNode`. Every enemy carries a `nodeId`,
+and failing to remove it from `node.alive` and set `node.respawnAt` silently stops that node
+repopulating. `Game.creditKill` is the *player* half — counters, quest progress, scaled
+xp/gold/drops. They are separate because kill credit is universal: everyone who damages a
+beast earns the full amount, never a split, so the world half must run once per death while
+the player half runs once per contributor. Merging them back breaks that.
+
+**Per-player state must never live in module scope.** Two bugs of exactly this shape have
+already been fixed: camp discovery mutated the exported `CAMPS` array, and `loot.ts` kept
+`nextUid` as a module counter that restarted at 1 on load and collided with restored gear.
+The project is headed toward a shared world where one player's progress must not be
+everyone's — so anything per-character belongs on `Game` and in the save, and `CAMPS` /
+`REGIONS` stay immutable placement data.
+
+**Two reward curves, doing different jobs.** `rewardScale` governs gold, drop chance and
+drop item level; it floors at 15% below you and 4% above, so a trivial beast is still worth
+looting and a tapped high-level beast is not worth farming. `xpScale` governs experience
+alone and reaches exactly zero eight levels down, so a region can be *outgrown*. Using
+`rewardScale` for xp re-enables infinite grinding in the starter zone; using `xpScale` for
+loot kills drops entirely. Neither ever touches kills, quests, counters or milestones —
+acknowledgment is unconditional, only the payout scales.
+
+**The save deliberately omits the world.** Terrain, props and spawn placement are pure
+functions of the seed, and the `Game` constructor fills every node on boot — so `hydrate`
+runs on top of an already-populated world and restores only the character. It also reseeds
+`this.rand`: the loot stream is fixed-seed with no recoverable position, so without that
+every session rolls the same drops from the top.
+
+**The offline ledger runs in buckets.** Rewards depend on level, so `offline.ts` steps in
+ten-minute slices and recomputes stats between them. Collapse it to a single pass and a
+character away overnight earns at its starting level all night.
 
 **Terrain is sampled at two resolutions from one function.** `World.sampleTile(wx, wy)` is
 the source of truth. Gameplay and collision go through `tileAt(tx, ty)` on the 32px grid
@@ -124,9 +169,18 @@ rebuild only when `dirty()` fires or a panel opens — cheap widgets (bars, cool
 minimap) update every frame. Anything that changes inventory, quests or counters must call
 `hooks.dirty()` or the open panel goes stale.
 
+**Persistence is layered so the simulation stays portable.** `game/save.ts` is the schema
+and version constant, `game/offline.ts` is the ledger — a pure
+`(save, elapsed, rng) → OfflineReport` — and `ui/storage.ts` is the only file that knows
+localStorage exists. `Game` produces and consumes a plain object and never touches storage,
+because the same schema is meant to be what a server persists per account. `killsPerHour`
+is exported from `offline.ts` and used by both the ledger and the Hunt tab, so the rate a
+player is shown before choosing a ground is the rate the ledger actually pays.
+
 **HUD stacking.** `#stickzone` is a large invisible pointer catcher over the lower-left of
 the screen. Any interactive control overlapping it needs an explicit higher `z-index`, or
-it silently stops receiving taps.
+it silently stops receiving taps. The return report sits at `z-index: 45`, above both the
+panel and the death overlay.
 
 **Units.** World pixels and art pixels are the same unit; `TILE` is 32. Sprites anchor at
 the feet (`Sheet.anchorY`), and the scene is y-sorted by ground position so props and
@@ -136,8 +190,15 @@ entities interleave correctly.
 
 Balance changes almost never need simulation code. `src/game/content.ts` holds enemy
 statlines, drop rates, the XP curve, stat derivation, ability numbers, item bases and
-affixes, the quest chain and the milestone table. Region placement, level bands, pack sizes
-and node counts are the `REGIONS` array in `src/game/world.ts`.
+affixes, the quest chain, the milestone table, both reward curves (`rewardScale`,
+`xpScale` / `XP_FALLOFF`) and the offline model (`OFFLINE`). Region placement, level bands,
+pack sizes and node counts are the `REGIONS` array in `src/game/world.ts`.
+
+One known gap, documented at the end of the README: offline accrual at `OFFLINE.efficiency`
+0.72 is nearly as fast as playing, so a single night away can carry a character past level
+16 — the point where every region is outgrown and no ground grants xp at all. The xp cutoff
+is tuned correctly for levels 1–15; it is the accrual rate that overshoots. Which knob to
+turn is a design decision, not a bug fix.
 
 ## TypeScript config
 

@@ -885,3 +885,176 @@ body {
     transform: translateX(-50%);
   }
 }
+
+/* ============================================================
+   Hunt tab — where the character works while you are away.
+   ============================================================ */
+
+.hunt-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.hunt-intro {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+.hunt-intro b {
+  color: var(--text);
+}
+.ground {
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ground.sel {
+  border-color: var(--gold);
+  background: rgba(242, 193, 78, 0.07);
+}
+.ground.locked {
+  opacity: 0.55;
+}
+.g-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.g-head b {
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+.g-head span {
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.g-desc {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.g-stat {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.g-stat b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.locked-note {
+  color: var(--hp);
+}
+.ground .btn {
+  align-self: flex-start;
+  margin-top: 3px;
+}
+.ground .btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ============================================================
+   Return report. Sits above every other layer, including the
+   stick zone, so its button always takes the tap.
+   ============================================================ */
+
+#report {
+  inset: 0;
+  display: none;
+  place-items: center;
+  background: rgba(6, 9, 14, 0.72);
+  pointer-events: auto;
+  z-index: 45;
+  backdrop-filter: blur(3px);
+  padding: 16px;
+}
+#report.show {
+  display: grid;
+}
+#report .r-in {
+  width: min(420px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 18px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  scrollbar-width: thin;
+  scrollbar-color: #3d4657 transparent;
+}
+.r-eyebrow {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--gold);
+}
+#report h2 {
+  font-size: 19px;
+  margin: 4px 0 0;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+.r-capped {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.6;
+  border-left: 2px solid var(--rage);
+  padding-left: 9px;
+}
+.r-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.r-stats > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.07);
+  padding-bottom: 5px;
+}
+.r-stats span {
+  color: var(--text-dim);
+}
+.r-stats b {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+.r-loot {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.r-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+}
+.r-item span {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+#report .btn {
+  width: 100%;
+  padding: 9px;
+}
+.ground.outgrown {
+  opacity: 0.8;
+}
+.ground.outgrown .g-head b {
+  filter: saturate(0.5);
+}
+.outgrown-note {
+  color: var(--rage);
+}
