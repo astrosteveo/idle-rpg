@@ -701,25 +701,33 @@ function drawBeastDiag(c: PixelCanvas, s: BeastSpec, col: number, back: boolean)
   const body = () => {
     // Waisted, not a tube: the haunch and chest keep their own mass at either
     // end so the animal doesn't read as one tapered log lying on a slope.
-    const steps = 10
+    //
+    // Swept rather than stamped: a row of discrete ovals along the spine each
+    // round their own extremes, and the union of those roundings is a visibly
+    // scalloped back. `sweep` takes the envelope first, so the slanted edge
+    // steps once per column.
     const wide = (t: number) =>
       (s.haunchR + (s.chestR - s.haunchR) * t) * (0.82 + 0.24 * Math.abs(t * 2 - 1))
     const tall = (t: number) => s.bodyH * (0.34 + 0.14 * Math.abs(t * 2 - 1)) + 1
     const at = (t: number) => [rx + (hx - rx) * t, ry + (hy - ry) * t] as const
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps
+    c.sweep((t) => {
       const [bx, by] = at(t)
-      c.oval(bx, by, wide(t), tall(t), P.fur)
-    }
+      return { x: bx, y: by, rx: wide(t), ry: tall(t) }
+    }, P.fur)
     if (s.hump) c.oval(hx - s.chestR * 0.3, hy - sign * 3, s.chestR * 0.9, 3, P.furL)
     // Spine highlight rides the up-frame edge; the belly catches light below.
     // Both are kept to a single scanline — swept along a diagonal, a thicker
     // band smears into a pale wedge across the middle of the animal.
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps
+    c.sweep((t) => {
       const [bx, by] = at(t)
-      c.oval(bx, by - tall(t) * 0.52, wide(t) * 0.5, 0.7, P.furL)
-      if (!back && t > 0.3) c.oval(bx, by + tall(t) * 0.6, wide(t) * 0.4, 0.7, P.belly)
+      return { x: bx, y: by - tall(t) * 0.52, rx: wide(t) * 0.5, ry: 0.55 }
+    }, P.furL)
+    if (!back) {
+      c.sweep((u) => {
+        const t = 0.3 + 0.7 * u
+        const [bx, by] = at(t)
+        return { x: bx, y: by + tall(t) * 0.6, rx: wide(t) * 0.4, ry: 0.55 }
+      }, P.belly)
     }
   }
 
@@ -744,16 +752,45 @@ function drawBeastDiag(c: PixelCanvas, s: BeastSpec, col: number, back: boolean)
   }
 }
 
+/**
+ * Grows a beast by its numbers rather than by a canvas transform. A fractional
+ * `ctx.scale` lands every rect edge on a fraction of a pixel, and `fillRect`
+ * answers that with anti-aliasing — the elites came out soft-edged, and the
+ * outline pass then traced the blur. Redrawing the body parametrically at the
+ * larger size keeps every edge on the grid. Radii stay fractional on purpose;
+ * only the parts that become rect edges or offsets need whole pixels.
+ */
+function scaleSpec(s: BeastSpec, k: number): BeastSpec {
+  const r = (v: number) => Math.round(v * k)
+  return {
+    ...s,
+    fw: r(s.fw),
+    fh: r(s.fh),
+    ground: r(s.ground),
+    bodyX: r(s.bodyX),
+    bodyLen: r(s.bodyLen),
+    bodyY: r(s.bodyY),
+    bodyH: r(s.bodyH),
+    haunchR: s.haunchR * k,
+    chestR: s.chestR * k,
+    headR: s.headR * k,
+    headX: r(s.headX),
+    headY: r(s.headY),
+    snout: r(s.snout),
+    earSize: r(s.earSize),
+    legLen: r(s.legLen),
+    legW: r(s.legW),
+    frontW: r(s.frontW),
+  }
+}
+
 export function makeBeastSheet(spec: BeastSpec, pal?: BeastPalette, scale = 1): Sheet {
-  const s: BeastSpec = pal ? { ...spec, pal } : spec
-  const fw = Math.round(spec.fw * scale)
-  const fh = Math.round(spec.fh * scale)
-  const ground = Math.round(spec.ground * scale)
-  return buildSheet(fw, fh, 8, 6, ground, (c, row, col) => {
+  const base: BeastSpec = pal ? { ...spec, pal } : spec
+  const s = scale === 1 ? base : scaleSpec(base, scale)
+  return buildSheet(s.fw, s.fh, 8, 6, s.ground, (c, row, col) => {
     c.ctx.save()
-    if (scale !== 1) c.ctx.scale(scale, scale)
     if (MIRRORED_ROWS.has(row)) {
-      c.ctx.translate(spec.fw, 0)
+      c.ctx.translate(s.fw, 0)
       c.ctx.scale(-1, 1)
     }
     if (row === 0) drawBeastFacing(c, s, col, false)

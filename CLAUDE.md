@@ -82,6 +82,21 @@ the source of truth. Gameplay and collision go through `tileAt(tx, ty)` on the 3
 affects both paths, and `sampleTile` runs thousands of times per chunk bake, so keep it
 cheap.
 
+**Slanted edges are rasterised one edge at a time.** Every shape in `render/pixel.ts`
+that has a diagonal side (`px`, `span`, `wedge`, `spike`, `cone`, `line`, `sweep`) rounds
+each edge as its own linear ramp and divides last. Both rules are load-bearing: rounding a
+position and a size separately makes the far edge inherit the near edge's error, centring
+a rounded width couples the two sides so the slant stutters with the width's parity, and
+`d * (i / n)` puts a half-step on the wrong side of a tie and drops one stair out of an
+otherwise even run. A taper's tip clamps to one pixel, so a shape narrower than about a
+pixel per row grows a stem rather than a point.
+
+**Never scale a sprite with `ctx.scale`.** `fillRect` on a fractional edge anti-aliases,
+the `outline` pass then traces the blur, and the result is soft — the elites were built
+this way and lost every hard edge. Elite beasts scale their `BeastSpec` numbers
+(`scaleSpec`) and redraw at the larger size instead. Whole pixels for anything that
+becomes a rect edge or offset; radii may stay fractional.
+
 ## Architecture notes
 
 **All art is generated at boot**, in `render/sprites.ts` on top of `render/pixel.ts`.
