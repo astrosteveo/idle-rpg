@@ -251,6 +251,23 @@ body {
   width: 210px;
   padding: 8px 10px;
 }
+#world-title {
+  left: 50%;
+  top: max(18px, env(safe-area-inset-top));
+  transform: translateX(-50%);
+  color: var(--text);
+  font: 600 26px/1.1 "Cinzel", Georgia, serif;
+  letter-spacing: 0.04em;
+  text-align: center;
+  text-shadow: 0 2px 4px #000, 0 0 20px rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+}
+#world-title small {
+  display: block;
+  margin-top: 4px;
+  color: #d3c29f;
+  font: 400 13px/1 "Cinzel", Georgia, serif;
+}
 #tracker h4 {
   margin: 0 0 5px;
   font-size: 10px;
@@ -740,16 +757,19 @@ body {
   flex: 1;
   min-width: 0;
 }
-.card .ctitle {
+.card .ctitle,
+.d-offer .ctitle {
   color: var(--text);
   font-size: 12px;
   margin-bottom: 2px;
 }
-.card .cdesc {
+.card .cdesc,
+.d-offer .cdesc {
   color: var(--text-dim);
   font-size: 10px;
 }
-.card .crew {
+.card .crew,
+.d-offer .crew {
   color: var(--gold);
   font-size: 10px;
   margin-top: 4px;
@@ -839,7 +859,7 @@ body {
 /* Phones, and short landscape windows, where the desktop HUD would collide
    with itself. The quest tracker drops out — it is duplicated in the Tasks
    panel — and everything else shrinks. */
-@media (max-width: 860px), (max-height: 560px) {
+@media (max-width: 860px), (max-height: 560px), (orientation: portrait) and (max-width: 1100px) {
   #tracker {
     display: none;
   }
@@ -866,6 +886,15 @@ body {
     width: 106px;
     padding: 5px;
   }
+  #world-title {
+    top: calc(max(6px, env(safe-area-inset-top)) + 72px);
+    left: max(64px, env(safe-area-inset-left));
+    right: calc(max(8px, env(safe-area-inset-right)) + 130px);
+    width: auto;
+    transform: none;
+    font-size: 18px;
+    white-space: normal;
+  }
   #minimap {
     width: 96px;
     height: 96px;
@@ -875,14 +904,6 @@ body {
   }
   #gold {
     font-size: 10px;
-  }
-  .ability {
-    width: 46px;
-    height: 46px;
-  }
-  .ability img {
-    width: 26px;
-    height: 26px;
   }
   .btn {
     padding: 5px 8px;
@@ -1284,4 +1305,586 @@ body {
 }
 .r-item.relic span {
   color: #ffbe6a;
+}
+
+/* ============================================================
+   Talking to people. The prompt and the dialogue box both sit
+   above the stick zone, or standing next to the warden would
+   swallow the tap that starts the conversation.
+   ============================================================ */
+
+#talkprompt {
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%);
+  display: none;
+  z-index: 30;
+  padding: 8px 14px;
+  font-size: 12px;
+  border-color: var(--gold);
+  box-shadow: 0 0 14px rgba(242, 193, 78, 0.25);
+}
+#talkprompt.show {
+  display: block;
+}
+
+#dialog {
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%);
+  width: min(460px, calc(100vw - 24px));
+  display: none;
+  flex-direction: column;
+  gap: 9px;
+  padding: 12px 14px 13px;
+  pointer-events: auto;
+  z-index: 32;
+}
+#dialog.show {
+  display: flex;
+}
+.d-who {
+  color: var(--gold);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+.d-who small {
+  display: block;
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.d-text {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text);
+  min-height: 38px;
+}
+.d-offer {
+  border: 1px solid #2a3140;
+  border-left: 2px solid var(--gold);
+  border-radius: 3px;
+  background: #12161f;
+  padding: 8px 10px;
+}
+.d-btns {
+  display: flex;
+  gap: 8px;
+}
+.d-btns .btn {
+  flex: 1;
+  padding: 8px;
+}
+.d-page {
+  font-size: 9px;
+  color: #5c6577;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  margin: -4px 0 -2px;
+}
+
+@media (max-width: 860px), (max-height: 560px), (orientation: portrait) and (max-width: 1100px) {
+  /* Clear of the ability row and the menu bar, which stack on a phone. */
+  #talkprompt,
+  #dialog {
+    bottom: 120px;
+  }
+  .d-text {
+    font-size: 11px;
+    min-height: 32px;
+  }
+}
+
+/* ============================================================
+   Travel. One task, one place, one button that walks there.
+   ============================================================ */
+
+.q-travel {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid #2a3140;
+  font-size: 10px;
+  color: #9ad0ff;
+}
+
+#tracker .t-go {
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px;
+  font-size: 10px;
+}
+#tracker .t-go.hide {
+  display: none;
+}
+
+.card .cprog {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: stretch;
+  min-width: 76px;
+  text-align: center;
+}
+.card .c-go {
+  padding: 4px 8px;
+  font-size: 10px;
+  width: 100%;
+}
+
+#autobtn small {
+  max-width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============================================================
+   Approved brass-and-charcoal interface system
+   ============================================================ */
+
+:root {
+  --ink: #080906;
+  --panel: rgba(13, 14, 12, 0.95);
+  --panel-2: rgba(22, 22, 18, 0.96);
+  --panel-edge: #6f5831;
+  --panel-edge-hi: #b58a42;
+  --text: #e8dfc8;
+  --text-dim: #b7aa8e;
+  --gold: #d7a84f;
+  --travel: #3c91dc;
+  --s4: 4px;
+  --s8: 8px;
+  --s12: 12px;
+  --s16: 16px;
+  --s24: 24px;
+  --s32: 32px;
+}
+
+html,
+body {
+  background: #050603;
+  font-family: "Source Sans 3", system-ui, sans-serif;
+}
+
+#loading {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--s12);
+  background:
+    radial-gradient(circle at 50% 40%, rgba(117, 87, 38, 0.18), transparent 28%),
+    #080906;
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+  transition: opacity 240ms ease, visibility 240ms ease;
+}
+#loading.done {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+#loading.fatal {
+  color: #d98170;
+}
+#loading strong {
+  color: var(--text);
+  font: 700 34px/1 "Cinzel", serif;
+  letter-spacing: 0.16em;
+}
+.loading-mark {
+  display: grid;
+  place-items: center;
+  width: 68px;
+  height: 68px;
+  color: #f1c96c;
+  font: 700 34px/1 "Cinzel", serif;
+  border: 1px solid var(--panel-edge-hi);
+  box-shadow: inset 0 0 0 3px #10100d, 0 0 40px rgba(183, 135, 53, 0.18);
+  clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 10px, 100% calc(100% - 10px), calc(100% - 10px) 100%, 10px 100%, 0 calc(100% - 10px), 0 10px);
+}
+
+.frame,
+.btn,
+.ability,
+.slot,
+.card,
+.ground,
+.tal-row,
+.beast {
+  border-color: var(--panel-edge);
+  border-radius: 0;
+  clip-path: polygon(5px 0, calc(100% - 5px) 0, 100% 5px, 100% calc(100% - 5px), calc(100% - 5px) 100%, 5px 100%, 0 calc(100% - 5px), 0 5px);
+}
+
+.frame {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.025), transparent 28%),
+    var(--panel);
+  box-shadow:
+    0 0 0 1px #050504,
+    0 0 0 2px rgba(181, 138, 66, 0.26),
+    0 10px 32px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 230, 180, 0.05);
+}
+
+.btn,
+.tab,
+.ability {
+  min-width: 44px;
+  min-height: 44px;
+  font-family: "Source Sans 3", sans-serif;
+}
+.btn {
+  background: linear-gradient(#29251d, #151512);
+  color: var(--text);
+}
+.btn:hover {
+  background: linear-gradient(#3a3121, #1e1c16);
+  border-color: var(--panel-edge-hi);
+}
+.btn.on {
+  background: linear-gradient(#194e7c, #102e4c);
+  border-color: #4da3ed;
+  color: #eaf5ff;
+}
+
+.v-name,
+.v-lvl,
+#zonename,
+#tracker h4,
+.q-name,
+.col-h,
+.banner-t,
+.ctitle,
+.g-head b,
+.d-who,
+#report h2 {
+  font-family: "Cinzel", Georgia, serif;
+}
+
+#vitals {
+  width: 352px;
+  min-height: 258px;
+  padding: 10px 12px 10px 118px;
+}
+#vitals .portrait {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  image-rendering: pixelated;
+  border: 1px solid var(--panel-edge-hi);
+  background: #090a08;
+}
+.v-name { font-size: 17px; letter-spacing: 0.11em; }
+.v-class { color: #cbb58b; }
+.v-lvl { font-size: 14px; }
+.bar { border-color: #594625; background: #090a08; }
+.bar.hp > .fill { background: linear-gradient(#b42920, #721710); }
+.bar.xp > .fill { background: linear-gradient(#1469ae, #0a3c6d); }
+.v-stats {
+  position: absolute;
+  top: 126px;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  font-family: "Cinzel", Georgia, serif;
+  font-size: 13px;
+}
+.v-stats span {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 4px;
+  border-bottom: 1px solid rgba(181, 138, 66, 0.18);
+}
+
+#mapbox {
+  width: 320px;
+  padding: 9px;
+}
+#minimap {
+  width: 300px;
+  height: 248px;
+  border-color: var(--panel-edge);
+}
+#tracker {
+  top: 326px;
+  width: 310px;
+  padding: 12px 14px;
+}
+#tracker .t-go {
+  color: #e9f5ff;
+  background: linear-gradient(#1b5689, #10375b);
+  border-color: #4e8fc7;
+}
+
+#actions {
+  inset: 0;
+  display: contents;
+}
+#abilities {
+  position: fixed;
+  left: 50%;
+  bottom: 270px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: var(--s24);
+  z-index: 12;
+}
+.ability {
+  width: 112px;
+  height: 112px;
+  overflow: visible;
+  border: 2px solid #8b6935;
+  border-radius: 50%;
+  clip-path: none;
+  background: radial-gradient(circle, #332818 0 54%, #10100d 56%);
+  box-shadow: 0 0 0 5px rgba(9, 9, 7, 0.85), 0 0 0 6px #6e512a;
+}
+/* No round mask here. The button already draws the disc, and clipping the icon
+   as well cut the corners off art that is square. */
+.ability img { width: 78px; height: 78px; }
+.ability .key {
+  top: -8px;
+  left: -8px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--text);
+  background: #151512;
+  border: 1px solid var(--panel-edge-hi);
+  font: 600 14px/1 "Cinzel", serif;
+}
+.ability-name {
+  position: absolute;
+  top: calc(100% + 9px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  color: var(--text);
+  font: 600 15px/1 "Cinzel", serif;
+  text-shadow: 0 2px 3px #000;
+}
+
+#menubar {
+  position: fixed;
+  right: max(10px, env(safe-area-inset-right));
+  bottom: max(10px, env(safe-area-inset-bottom));
+  display: grid;
+  grid-template-columns: repeat(6, minmax(76px, 1fr));
+  gap: 2px;
+  z-index: 12;
+  padding: 3px;
+  background: rgba(10, 10, 8, 0.94);
+  border: 1px solid var(--panel-edge);
+}
+.menu-btn {
+  min-height: 108px;
+  padding: 10px 8px;
+  color: #d9c8a4;
+  font: 600 13px/1.2 "Cinzel", serif;
+  text-transform: none;
+  border-color: #4e4029;
+}
+
+#autobtn {
+  left: auto;
+  right: 34px;
+  bottom: 220px;
+  width: 112px;
+  height: 112px;
+  padding: 18px 8px;
+  border-radius: 50%;
+  clip-path: none;
+  color: #e9d5a4;
+  font: 600 14px/1.2 "Cinzel", serif;
+  background: radial-gradient(circle, #392c19, #12120f 68%);
+  border: 2px solid var(--panel-edge-hi);
+  box-shadow: 0 0 0 5px rgba(8, 8, 6, 0.78), 0 0 24px rgba(210, 155, 60, 0.12);
+}
+#autobtn small { margin-top: 7px; font-family: "Source Sans 3", sans-serif; }
+
+#log {
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  width: 390px;
+}
+.logline { font-family: "Source Sans 3", sans-serif; background: rgba(9, 9, 7, 0.82); }
+
+#panel {
+  left: max(10px, env(safe-area-inset-left));
+  top: 278px;
+  transform: none;
+  width: 398px;
+  height: min(560px, calc(100vh - 292px));
+}
+.p-head { border-color: var(--panel-edge); }
+.tab { font-size: 10px; padding-inline: 9px; }
+.tab.sel { color: #f0ca77; background: #282219; border-color: var(--panel-edge); }
+.p-body { background: linear-gradient(rgba(18, 18, 15, 0.96), rgba(9, 10, 8, 0.97)); }
+.inv-wrap { gap: var(--s16); }
+.equip-col { width: 100%; }
+.bag-col { min-width: 100%; }
+.slot { width: 48px; height: 48px; background: #11120f; }
+.slot img { width: 42px; height: 42px; }
+.equip-grid { grid-template-columns: repeat(6, 48px); }
+.bag-grid { grid-template-columns: repeat(6, 48px); justify-content: start; }
+
+#chrome-toggle {
+  display: none;
+  z-index: 40;
+}
+
+:focus-visible {
+  outline: 3px solid #75baff;
+  outline-offset: 3px;
+}
+
+@media (max-width: 860px), (max-height: 560px), (orientation: portrait) and (max-width: 1100px) {
+  #ui { padding: 0; }
+  #vitals {
+    top: max(6px, env(safe-area-inset-top));
+    left: max(8px, env(safe-area-inset-left));
+    width: calc(100vw - max(16px, env(safe-area-inset-left)) - max(16px, env(safe-area-inset-right)));
+    height: 58px;
+    min-height: 58px;
+    padding: 6px 8px 6px 74px;
+  }
+  #vitals .portrait { width: 48px; height: 48px; top: 5px; left: 8px; }
+  .v-row { margin-bottom: 2px; }
+  .v-name { font-size: 14px; }
+  .v-class, .v-stats { display: none; }
+  .bar { position: absolute; left: 74px; right: 8px; height: 12px; top: 27px; }
+  .bar.xp { top: 43px; height: 7px; }
+  #mapbox {
+    top: calc(max(6px, env(safe-area-inset-top)) + 68px);
+    right: max(8px, env(safe-area-inset-right));
+    width: clamp(122px, 30vw, 300px);
+    padding: 5px;
+  }
+  #minimap { width: 100%; height: auto; aspect-ratio: 1; }
+  #gold { display: none; }
+  #tracker {
+    display: block;
+    top: calc(max(6px, env(safe-area-inset-top)) + clamp(196px, calc(33vw + 68px), 380px));
+    right: max(8px, env(safe-area-inset-right));
+    width: clamp(190px, 30vw, 300px);
+    padding: 8px 10px;
+  }
+  #tracker .q-desc, #tracker h4, #tracker .q-bar { display: none; }
+  #tracker .q-name { font-size: 13px; }
+  #abilities {
+    bottom: calc(max(92px, env(safe-area-inset-bottom) + 84px));
+    gap: 28px;
+  }
+  .ability { width: 76px; height: 76px; }
+  .ability img { width: 58px; height: 58px; }
+  .ability-name { font-size: 12px; top: calc(100% + 5px); }
+  .ability .key { width: 24px; height: 24px; font-size: 11px; }
+  #menubar {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    grid-template-columns: repeat(6, 1fr);
+    padding: 2px max(4px, env(safe-area-inset-right)) max(2px, env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
+  }
+  .menu-btn {
+    min-width: 0;
+    min-height: 68px;
+    padding: 8px 1px;
+    font-size: clamp(9px, 2.8vw, 13px);
+    letter-spacing: 0;
+  }
+  #autobtn {
+    right: max(16px, env(safe-area-inset-right));
+    bottom: calc(max(104px, env(safe-area-inset-bottom) + 96px));
+    width: 86px;
+    height: 86px;
+    font-size: 11px;
+  }
+  #autobtn small { display: none; }
+  #log { display: none; }
+  #panel {
+    left: max(6px, env(safe-area-inset-left));
+    right: max(6px, env(safe-area-inset-right));
+    top: auto;
+    bottom: max(2px, env(safe-area-inset-bottom));
+    width: auto;
+    height: min(58dvh, 610px);
+    max-height: 58dvh;
+    transform: none;
+    z-index: 35;
+  }
+  .p-head { min-height: 50px; padding-top: 5px; }
+  .tab { min-height: 44px; }
+  .p-body { padding: 10px; }
+  .equip-grid { grid-template-columns: repeat(6, minmax(44px, 1fr)); }
+  .bag-grid { grid-template-columns: repeat(6, minmax(44px, 1fr)); }
+  .slot { width: 100%; min-width: 44px; height: 48px; }
+  #chrome-toggle {
+    display: block;
+    top: calc(max(6px, env(safe-area-inset-top)) + 72px);
+    left: max(8px, env(safe-area-inset-left));
+    width: 46px;
+    height: 46px;
+    padding: 0;
+    font-size: 20px;
+  }
+  #stickzone { width: 58%; height: 62%; }
+  #stick {
+    border-color: rgba(215, 190, 142, 0.52);
+    background: radial-gradient(circle, rgba(31, 27, 20, 0.62), rgba(16, 15, 12, 0.2));
+  }
+  #stick > i { background: radial-gradient(circle at 35% 30%, #8c7856, #373126); }
+  #ui.chrome-collapsed #actions,
+  #ui.chrome-collapsed #panel { display: none !important; }
+  #ui:has(#panel.open):not(.chrome-collapsed) #menubar {
+    bottom: min(58dvh, 610px);
+  }
+  #ui:has(#panel.open):not(.chrome-collapsed) #abilities {
+    bottom: calc(min(58dvh, 610px) + 92px);
+  }
+  #ui:has(#panel.open):not(.chrome-collapsed) #autobtn {
+    bottom: calc(min(58dvh, 610px) + 88px);
+  }
+  #ui:has(#panel.open):not(.chrome-collapsed) #panel .p-head { display: none; }
+}
+
+@media (max-width: 500px) {
+  #tracker {
+    top: calc(max(6px, env(safe-area-inset-top)) + 104px);
+    left: max(8px, env(safe-area-inset-left));
+    right: auto;
+    width: 184px;
+    padding: 6px 8px;
+  }
+  #tracker .q-obj { display: none; }
+  #tracker .q-name { font-size: 11px; white-space: nowrap; }
+  #tracker .t-go { min-height: 44px; margin-top: 4px; }
+  #ui:has(#panel.open):not(.chrome-collapsed) #abilities {
+    bottom: calc(min(58dvh, 610px) + 82px);
+  }
+  #ui:has(#panel.open):not(.chrome-collapsed) #autobtn {
+    bottom: calc(min(58dvh, 610px) + 80px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }

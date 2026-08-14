@@ -1,0 +1,15 @@
+{
+  "out": "public/assets/generated/warrior-atlas-8dir.png",
+  "standingHeight": 63,
+  "columns": 7,
+  "strips": {
+    "S":  "art/characters/warrior/S.png",
+    "W":  "art/characters/warrior/W.png",
+    "E":  "art/characters/warrior/E.png",
+    "N":  "art/characters/warrior/N.png",
+    "SE": "art/characters/warrior/SE.png",
+    "SW": "art/characters/warrior/SW.png",
+    "NE": "art/characters/warrior/NE.png",
+    "NW": "art/characters/warrior/NW.png"
+  }
+}

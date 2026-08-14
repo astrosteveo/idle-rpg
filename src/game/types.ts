@@ -1,4 +1,4 @@
-import type { BeastSheetId, IconKind } from '../render/sprites'
+import type { BeastSheetId, IconKind } from '../assets/types'
 
 /** Sprite sheet row. See `facingToDir` for the octant each value covers. */
 export type Dir = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7

@@ -23,7 +23,7 @@ import {
   xpForLevel,
   xpScale,
 } from './content'
-import { itemScore, makeItem, makeUnique, rollRarity, sumStats } from './loot'
+import { itemScore, makeItem, makeUnique, rollRarity, sumStats, UidSequence } from './loot'
 import type { DerivedStats } from './content'
 import type { Rng } from '../core/math'
 import type { Save } from './save'
@@ -79,6 +79,7 @@ export interface OfflineReport {
  * assigned ground, or a ground with nothing living in it.
  */
 export function runOfflineLedger(save: Save, nowMs: number, rand: Rng): OfflineReport | null {
+  const uids = new UidSequence(save.nextUid)
   const elapsedSeconds = Math.max(0, (nowMs - save.savedAt) / 1000)
   if (elapsedSeconds < OFFLINE.minReportSeconds) return null
 
@@ -157,7 +158,7 @@ export function runOfflineLedger(save: Save, nowMs: number, rand: Rng): OfflineR
   for (let i = 0; i < sampled; i++) {
     const rarity = rollRarity(rand, eliteShare > 0 && rand() < eliteShare ? ELITE.rarityBonus : 0)
     const ilvl = groundLevel * finalScale + level * (1 - finalScale)
-    rolled.push(makeItem(rand, Math.max(1, Math.round(ilvl) + rand.int(-1, 2)), rarity))
+    rolled.push(makeItem(rand, Math.max(1, Math.round(ilvl) + rand.int(-1, 2)), rarity, uids))
   }
   rolled.sort((a, b) => itemScore(b) - itemScore(a))
 
@@ -173,7 +174,7 @@ export function runOfflineLedger(save: Save, nowMs: number, rand: Rng): OfflineR
   )
 
   const eliteKills = Math.round(kills * eliteShare)
-  const relic = rollRelic(save, kind, eliteKills, finalScale, level, rand)
+  const relic = rollRelic(save, kind, eliteKills, finalScale, level, rand, uids)
   if (relic) items.push(relic.item)
 
   return {
@@ -211,6 +212,7 @@ function rollRelic(
   scale: number,
   level: number,
   rand: Rng,
+  uids: UidSequence,
 ): { id: string; item: Item } | null {
   if (eliteKills <= 0) return null
   const found = new Set(save.foundUniques)
@@ -219,5 +221,5 @@ function rollRelic(
   const per = UNIQUE_DROP_CHANCE * scale
   if (rand() > 1 - Math.pow(1 - per, eliteKills)) return null
   const def = rand.pick(pool)
-  return { id: def.id, item: makeUnique(def, level) }
+  return { id: def.id, item: makeUnique(def, level, uids) }
 }

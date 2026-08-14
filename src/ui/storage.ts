@@ -5,7 +5,7 @@
  * lifecycle plumbing, so swapping localStorage for a server call later touches
  * nothing in the simulation.
  */
-import type { Game } from '../game/state'
+import type { EcsSimulation } from '../game/state'
 import { SAVE_KEY, readSave, type Save } from '../game/save'
 
 export function loadSave(expectSeed: number): Save | null {
@@ -20,7 +20,7 @@ export function loadSave(expectSeed: number): Save | null {
   }
 }
 
-export function writeSave(game: Game) {
+export function writeSave(game: EcsSimulation) {
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify(game.serialize()))
   } catch {
@@ -41,7 +41,7 @@ export function clearSave() {
  * mobile. `beforeunload` is deliberately not used — it is unreliable on phones,
  * and this game is built to be played on one.
  */
-export function installAutosave(game: Game, intervalMs = 10000) {
+export function installAutosave(game: EcsSimulation, intervalMs = 10000) {
   setInterval(() => writeSave(game), intervalMs)
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') writeSave(game)

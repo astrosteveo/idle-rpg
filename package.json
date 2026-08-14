@@ -5,12 +5,26 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "atlas:measure": "node tools/measure-atlas.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:browser": "playwright test",
+    "verify": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:browser",
+    "atlas:characters": "node tools/build-character-atlas.mjs"
   },
   "devDependencies": {
-    "typescript": "^7.0.2",
-    "vite": "^8.2.1"
+    "@playwright/test": "^1.62.1",
+    "eslint": "^10.8.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.67.0",
+    "vite": "^8.2.1",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "@fontsource/cinzel": "^5.3.0",
+    "@fontsource/source-sans-3": "^5.3.0"
   }
 }

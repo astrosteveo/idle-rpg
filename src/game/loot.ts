@@ -12,19 +12,21 @@ import {
 } from './content'
 import type { Item, ItemStats } from './types'
 
-let nextUid = 1
+/** Per-character id source. No player-owned state lives in module scope. */
+export class UidSequence {
+  constructor(private value = 1) {}
 
-/**
- * Item uids must not restart at 1 when a save is loaded, or the first fresh drop
- * collides with gear the player is already wearing — equip, sell and tooltips all
- * key off uid. Saves carry the high-water mark and restore it before play begins.
- */
-export function uidMark(): number {
-  return nextUid
-}
+  next(): number {
+    return this.value++
+  }
 
-export function restoreUidMark(n: number) {
-  if (Number.isFinite(n) && n > nextUid) nextUid = Math.floor(n)
+  mark(): number {
+    return this.value
+  }
+
+  restore(value: number) {
+    if (Number.isFinite(value) && value > this.value) this.value = Math.floor(value)
+  }
 }
 
 export function baseById(id: string): ItemBase {
@@ -41,7 +43,7 @@ export function rollRarity(r: Rng, bonus = 0): number {
   return 0
 }
 
-export function makeItem(r: Rng, ilvl: number, rarity: number, baseId?: string): Item {
+export function makeItem(r: Rng, ilvl: number, rarity: number, uids: UidSequence, baseId?: string): Item {
   const base = baseId ? baseById(baseId) : r.pick(ITEM_BASES)
   const lvl = Math.max(1, Math.round(ilvl))
   const rar = clamp(rarity, 0, 4)
@@ -65,7 +67,7 @@ export function makeItem(r: Rng, ilvl: number, rarity: number, baseId?: string):
   const suffix = rar >= 2 ? ` ${r.pick(SUFFIXES.slice(1))}` : ''
 
   return {
-    uid: nextUid++,
+    uid: uids.next(),
     base: base.id,
     name: `${prefix}${base.name}${suffix}`.trim(),
     slot: base.slot,
@@ -83,13 +85,13 @@ export function makeItem(r: Rng, ilvl: number, rarity: number, baseId?: string):
  * character rather than the beast, so a relic found at 6 is not dead weight
  * at 14; there is only ever one of each, and it has to last.
  */
-export function makeUnique(def: UniqueDef, ilvl: number): Item {
+export function makeUnique(def: UniqueDef, ilvl: number, uids: UidSequence): Item {
   const lvl = Math.max(1, Math.round(ilvl))
   const stats: ItemStats = {}
   if (def.dmg) stats.dmg = Math.round(def.dmg * lvl + 3)
   if (def.armor) stats.armor = Math.round(def.armor * lvl + 2)
   return {
-    uid: nextUid++,
+    uid: uids.next(),
     base: def.id,
     name: def.name,
     slot: def.slot,

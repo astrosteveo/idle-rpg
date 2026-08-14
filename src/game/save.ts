@@ -1,22 +1,11 @@
-/**
- * The save schema.
- *
- * Nothing here touches the DOM or storage. `Game` hands over a plain object and
- * takes one back, so the same schema a browser writes to localStorage is the one
- * a server would persist per account — which is the point, since the simulation
- * is meant to run in either place unchanged.
- *
- * Node populations are deliberately absent. Terrain, props and spawn placement
- * are pure functions of the world seed, and the `Game` constructor seeds every
- * node full on boot; a save that carried them would be describing shared-world
- * state a server will eventually own.
- */
+import type { IconKind } from '../assets/types'
+import { BOSSES, ITEM_BASES, MILESTONES, QUESTS, TALENT_ROWS, UNIQUES } from './content'
 import type { Counters } from './state'
-import { ENEMY_KINDS, perSpecies, type Item, type Slot } from './types'
-import type { BiomeId } from './world'
+import { ENEMY_KINDS, SLOTS, perSpecies, type Item, type ItemStats, type Slot } from './types'
+import { CAMPS, LANDMARKS, REGIONS, WORLD_SIZE, type BiomeId } from './world'
 
-export const SAVE_VERSION = 5
-export const SAVE_KEY = 'wildmarch.save'
+export const SAVE_VERSION = 1
+export const SAVE_KEY = 'wildmarch.ecs.save.v1'
 
 export interface SavedPlayer {
   x: number
@@ -32,120 +21,250 @@ export interface SavedPlayer {
   auto: boolean
 }
 
-export interface SaveV5 {
-  v: number
-  /** Saves are tied to the world they were made in. */
+export interface SaveV1 {
+  v: 1
   seed: number
-  /** Epoch ms, the anchor the offline ledger measures from. */
   savedAt: number
   player: SavedPlayer
   bag: (Item | null)[]
   equipped: Record<Slot, Item | null>
-  /** Item uid high-water mark — see `restoreUidMark` in loot.ts. */
   nextUid: number
   counters: Counters
   questIndex: number
   questProgress: number
+  questTaken: boolean
   claimed: string[]
   discovered: string[]
-  /** Named places this character has stood in. Grants nothing; remembers. */
   seenLandmarks: string[]
-  /**
-   * Boss id → the scheduling window this character has already taken. The
-   * schedule itself is derived from wall time and is the same for everyone;
-   * only "have I had this one yet" is per-character, and only because there is
-   * no server to own it.
-   */
   bossCleared: Record<string, number>
   huntingGround: BiomeId | null
-  /** Whether the ground was chosen deliberately or is still following the player. */
   groundPinned: boolean
   autoEquip: boolean
-  /** One talent id per unlocked row, in pick order. */
   talents: string[]
-  /**
-   * Relics this character has ever found, so no elite drops the same one twice.
-   * Kept separate from the bag on purpose: a relic that was sold, or is sitting
-   * in storage a future version adds, is still found.
-   */
   foundUniques: string[]
 }
 
-/** The schema at the current version. Everything outside this file uses it. */
-export type Save = SaveV5
+export type Save = SaveV1
 
-/**
- * Structural check plus a forward migration, in one pass, because callers only
- * ever want the answer to "can I play this?".
- *
- * A save from another world is discarded — the seed decides where every camp
- * and den is, so a character restored into a different one would be standing in
- * a lake. Older schema versions are filled in with defaults instead, which is
- * cheap while every addition so far is additive.
- */
-export function readSave(x: unknown, expectSeed: number): Save | null {
-  if (!x || typeof x !== 'object') return null
-  const s = x as Partial<Save>
-  if (typeof s.v !== 'number' || s.v < 1 || s.v > SAVE_VERSION) return null
-  if (s.seed !== expectSeed) return null
-  if (typeof s.savedAt !== 'number' || !Number.isFinite(s.savedAt)) return null
-  if (!s.player || typeof s.player.level !== 'number') return null
-  if (!Array.isArray(s.bag) || !s.equipped) return null
-  if (!s.counters || typeof s.counters.kills !== 'number') return null
-  if (!Array.isArray(s.claimed) || !Array.isArray(s.discovered)) return null
+const ICONS = new Set<IconKind>(['axe', 'sword', 'mace', 'helm', 'chest', 'gloves', 'boots', 'ring', 'coin', 'pelt'])
+const ITEM_IDS = new Set(ITEM_BASES.map((item) => item.id))
+const UNIQUE_IDS = new Set(UNIQUES.map((item) => item.id))
+const TALENT_IDS = new Set(TALENT_ROWS.flatMap((row) => row.choices.map((choice) => choice.id)))
+const CLAIM_IDS = new Set(MILESTONES.map((milestone) => milestone.id))
+const CAMP_IDS = new Set(CAMPS.map((camp) => camp.id))
+const LANDMARK_IDS = new Set(LANDMARKS.map((landmark) => landmark.id))
+const BOSS_IDS = new Set(BOSSES.map((boss) => boss.id))
+const BIOME_IDS = new Set<string>(REGIONS.map((region) => region.id))
 
-  // v1 → v2: talents and found relics did not exist. An existing character
-  // keeps its level and simply arrives with its picks unspent.
-  const talents = Array.isArray(s.talents) ? s.talents.filter(isId) : []
-  const foundUniques = Array.isArray(s.foundUniques) ? s.foundUniques.filter(isId) : []
-  // v3 → v4: named landmarks did not exist. An existing character has simply
-  // never noticed any of them, and finds them the next time it walks past.
-  const seenLandmarks = Array.isArray(s.seenLandmarks) ? s.seenLandmarks.filter(isId) : []
-  // v4 → v5: world bosses did not exist, so no window has been taken and the
-  // first of each is standing when the character arrives.
-  const bossCleared: Record<string, number> = {}
-  if (s.bossCleared && typeof s.bossCleared === 'object') {
-    for (const [id, win] of Object.entries(s.bossCleared)) {
-      if (typeof win === 'number' && Number.isFinite(win)) bossCleared[id] = win
-    }
-  }
+/** Decode every value from unknown. A single invalid field rejects the whole save. */
+export function readSave(value: unknown, expectSeed: number): Save | null {
+  const root = record(value)
+  if (!root || root.v !== SAVE_VERSION || root.seed !== expectSeed) return null
+  const savedAt = finite(root.savedAt, 0, Number.MAX_SAFE_INTEGER)
+  const player = readPlayer(root.player)
+  const bag = readBag(root.bag)
+  const equipped = readEquipment(root.equipped)
+  const counters = readCounters(root.counters)
+  const nextUid = integer(root.nextUid, 1, Number.MAX_SAFE_INTEGER)
+  const questIndex = integer(root.questIndex, 0, QUESTS.length)
+  const questProgress = integer(root.questProgress, 0, 1_000_000_000)
+  const claimed = idArray(root.claimed, CLAIM_IDS, MILESTONES.length)
+  const discovered = idArray(root.discovered, CAMP_IDS, CAMPS.length)
+  const seenLandmarks = idArray(root.seenLandmarks, LANDMARK_IDS, LANDMARKS.length)
+  const bossCleared = numberRecord(root.bossCleared, BOSS_IDS)
+  const talents = idArray(root.talents, TALENT_IDS, TALENT_ROWS.length)
+  const foundUniques = idArray(root.foundUniques, UNIQUE_IDS, UNIQUES.length)
+  const huntingGround = root.huntingGround === null
+    ? null
+    : typeof root.huntingGround === 'string' && BIOME_IDS.has(root.huntingGround)
+      ? (root.huntingGround as BiomeId)
+      : undefined
+
+  if (
+    savedAt === null || !player || !bag || !equipped || !counters || nextUid === null ||
+    questIndex === null || questProgress === null || !claimed || !discovered || !seenLandmarks ||
+    !bossCleared || !talents || !foundUniques || huntingGround === undefined ||
+    typeof root.questTaken !== 'boolean' || typeof root.groundPinned !== 'boolean' ||
+    typeof root.autoEquip !== 'boolean'
+  ) return null
 
   return {
-    ...(s as Save),
     v: SAVE_VERSION,
-    talents,
-    foundUniques,
+    seed: expectSeed,
+    savedAt,
+    player,
+    bag,
+    equipped,
+    nextUid,
+    counters,
+    questIndex,
+    questProgress,
+    questTaken: root.questTaken,
+    claimed,
+    discovered,
     seenLandmarks,
     bossCleared,
-    counters: readCounters(s.counters),
+    huntingGround,
+    groundPinned: root.groundPinned,
+    autoEquip: root.autoEquip,
+    talents,
+    foundUniques,
   }
 }
 
-/**
- * v2 → v3: per-species kills moved from a field per animal (`wolf`, `bear`) to
- * one record keyed by species. The old fields were already named for their
- * species, so the migration is a lookup rather than a translation table — and a
- * species added since the save was written simply starts at zero.
- */
-function readCounters(x: unknown): Counters {
-  const c = (x ?? {}) as Record<string, unknown>
-  const legacy = (c.species ?? c) as Record<string, unknown>
-  const species = perSpecies(0)
-  for (const kind of ENEMY_KINDS) species[kind] = count(legacy[kind])
+function readPlayer(value: unknown): SavedPlayer | null {
+  const source = record(value)
+  if (!source) return null
+  const x = finite(source.x, 0, WORLD_SIZE)
+  const y = finite(source.y, 0, WORLD_SIZE)
+  const level = integer(source.level, 1, 10_000)
+  const xp = finite(source.xp, 0, 1e15)
+  const xpNext = finite(source.xpNext, 1, 1e15)
+  const str = finite(source.str, 0, 1e9)
+  const vit = finite(source.vit, 0, 1e9)
+  const agi = finite(source.agi, 0, 1e9)
+  const hp = finite(source.hp, 0, 1e15)
+  const gold = finite(source.gold, 0, 1e15)
+  if ([x, y, level, xp, xpNext, str, vit, agi, hp, gold].some((field) => field === null)) return null
+  if (typeof source.auto !== 'boolean') return null
+  return { x: x!, y: y!, level: level!, xp: xp!, xpNext: xpNext!, str: str!, vit: vit!, agi: agi!, hp: hp!, gold: gold!, auto: source.auto }
+}
+
+function readBag(value: unknown): (Item | null)[] | null {
+  if (!Array.isArray(value) || value.length !== 40) return null
+  const out: (Item | null)[] = []
+  for (const entry of value) {
+    if (entry === null) out.push(null)
+    else {
+      const item = readItem(entry)
+      if (!item) return null
+      out.push(item)
+    }
+  }
+  return out
+}
+
+function readEquipment(value: unknown): Record<Slot, Item | null> | null {
+  const source = record(value)
+  if (!source) return null
+  const out = {} as Record<Slot, Item | null>
+  for (const slot of SLOTS) {
+    const raw = source[slot]
+    if (raw === null) out[slot] = null
+    else {
+      const item = readItem(raw)
+      if (!item || item.slot !== slot) return null
+      out[slot] = item
+    }
+  }
+  return out
+}
+
+function readItem(value: unknown): Item | null {
+  const source = record(value)
+  if (!source) return null
+  const uid = integer(source.uid, 1, Number.MAX_SAFE_INTEGER)
+  const rarity = integer(source.rarity, 0, 4)
+  const ilvl = integer(source.ilvl, 1, 100_000)
+  const itemValue = integer(source.value, 0, 1e12)
+  const stats = readStats(source.stats)
+  if (
+    uid === null || rarity === null || ilvl === null || itemValue === null || !stats ||
+    typeof source.base !== 'string' || (!ITEM_IDS.has(source.base) && !UNIQUE_IDS.has(source.base)) ||
+    typeof source.name !== 'string' || source.name.length < 1 || source.name.length > 120 ||
+    typeof source.slot !== 'string' || !SLOTS.includes(source.slot as Slot) ||
+    typeof source.icon !== 'string' || !ICONS.has(source.icon as IconKind)
+  ) return null
+  const unique = source.unique === undefined
+    ? undefined
+    : typeof source.unique === 'string' && UNIQUE_IDS.has(source.unique)
+      ? source.unique
+      : null
+  if (unique === null) return null
+  if (unique && (source.base !== unique || itemValue !== 0 || rarity !== 4)) return null
   return {
-    kills: count(c.kills),
-    elite: count(c.elite),
-    bosses: count(c.bosses),
-    gold: count(c.gold),
-    quests: count(c.quests),
-    species,
+    uid,
+    base: source.base,
+    name: source.name,
+    slot: source.slot as Slot,
+    icon: source.icon as IconKind,
+    rarity,
+    ilvl,
+    stats,
+    value: itemValue,
+    ...(unique ? { unique } : {}),
   }
 }
 
-function count(x: unknown): number {
-  return typeof x === 'number' && Number.isFinite(x) ? x : 0
+function readStats(value: unknown): ItemStats | null {
+  const source = record(value)
+  if (!source) return null
+  const allowed = new Set(['dmg', 'armor', 'str', 'vit', 'agi'])
+  if (Object.keys(source).some((key) => !allowed.has(key))) return null
+  const out: ItemStats = {}
+  for (const key of allowed as Set<keyof ItemStats>) {
+    if (source[key] === undefined) continue
+    const amount = finite(source[key], 0, 1e9)
+    if (amount === null) return null
+    out[key] = amount
+  }
+  return out
 }
 
-function isId(x: unknown): x is string {
-  return typeof x === 'string'
+function readCounters(value: unknown): Counters | null {
+  const source = record(value)
+  const speciesSource = source ? record(source.species) : null
+  if (!source || !speciesSource) return null
+  const species = perSpecies(0)
+  for (const kind of ENEMY_KINDS) {
+    const amount = integer(speciesSource[kind], 0, Number.MAX_SAFE_INTEGER)
+    if (amount === null) return null
+    species[kind] = amount
+  }
+  const kills = integer(source.kills, 0, Number.MAX_SAFE_INTEGER)
+  const elite = integer(source.elite, 0, Number.MAX_SAFE_INTEGER)
+  const bosses = integer(source.bosses, 0, Number.MAX_SAFE_INTEGER)
+  const gold = integer(source.gold, 0, Number.MAX_SAFE_INTEGER)
+  const quests = integer(source.quests, 0, Number.MAX_SAFE_INTEGER)
+  if ([kills, elite, bosses, gold, quests].some((field) => field === null)) return null
+  return { kills: kills!, elite: elite!, bosses: bosses!, gold: gold!, quests: quests!, species }
+}
+
+function idArray(value: unknown, allowed: ReadonlySet<string>, maxLength: number): string[] | null {
+  if (!Array.isArray(value) || value.length > maxLength) return null
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const entry of value) {
+    if (typeof entry !== 'string' || !allowed.has(entry) || seen.has(entry)) return null
+    seen.add(entry)
+    out.push(entry)
+  }
+  return out
+}
+
+function numberRecord(value: unknown, allowed: ReadonlySet<string>): Record<string, number> | null {
+  const source = record(value)
+  if (!source) return null
+  const out: Record<string, number> = {}
+  for (const [key, raw] of Object.entries(source)) {
+    const amount = integer(raw, 0, Number.MAX_SAFE_INTEGER)
+    if (!allowed.has(key) || amount === null) return null
+    out[key] = amount
+  }
+  return out
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function finite(value: unknown, min: number, max: number): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max ? value : null
+}
+
+function integer(value: unknown, min: number, max: number): number | null {
+  const number = finite(value, min, max)
+  return number !== null && Number.isInteger(number) ? number : null
 }

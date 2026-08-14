@@ -8,7 +8,9 @@
  * Trains of monsters therefore cannot follow you from camp to camp.
  */
 import { clamp, dist, facingToDir, rng, type Rng } from '../core/math'
+import { BEAST_GEOMETRY } from '../assets/types'
 import {
+  AUTO,
   BEHAVIOUR,
   BOSS,
   BOSSES,
@@ -51,6 +53,7 @@ import {
   type DerivedStats,
   type Metric,
   type Mods,
+  type QuestDef,
   type QuestReward,
   type TalentRow,
 } from './content'
@@ -58,12 +61,24 @@ import {
   itemScore,
   makeItem,
   makeUnique,
-  restoreUidMark,
   sumStats,
-  uidMark,
+  UidSequence,
   uniqueDefOf,
 } from './loot'
-import { beastSheetScale, type BeastSheetId } from '../render/sprites'
+import type { BeastSheetId } from '../assets/types'
+import { componentStores, type ComponentStores } from './components'
+import type {
+  CommandResult,
+  DomainEvent,
+  GameCommand,
+  GameSnapshot,
+  InputFrame,
+  Revisions,
+  Simulation,
+  SimulationDependencies,
+  ViewRect,
+} from './contracts'
+import { SpatialHash } from './spatial'
 import type { OfflineReport } from './offline'
 import { SAVE_VERSION, type Save } from './save'
 import {
@@ -74,9 +89,11 @@ import {
   World,
   WORLD_SIZE,
   groundLevelOf,
+  npcById,
   type BiomeId,
   type Camp,
   type Landmark,
+  type Npc,
   type Region,
   type SpawnNode,
 } from './world'
@@ -105,11 +122,40 @@ export interface GameHooks {
   dirty(): void
 }
 
-interface ViewRect {
-  x0: number
-  y0: number
-  x1: number
-  y1: number
+/** A walk in progress: where to, the way there, and how far along it is. */
+interface Route {
+  x: number
+  y: number
+  path: { x: number; y: number }[]
+  at: number
+  /** Seconds spent going nowhere. Past a second or so, the way needs redrawing. */
+  stuck: number
+}
+
+/**
+ * Somewhere auto-battle is walking to, on purpose. Transient: it is a decision
+ * the player just made, not progress, so the save does not carry it.
+ */
+export interface TravelTarget {
+  x: number
+  y: number
+  /** What the HUD calls this journey. */
+  label: string
+  /** How close counts as arrived. */
+  arrive: number
+  /** The task this journey serves, so finishing the task ends the journey. */
+  questId?: string
+  /**
+   * What the journey is hunting. Meeting one on the way counts as arriving —
+   * the point was the beasts, not the ground they stand on.
+   */
+  hunt?: EnemyKind | 'elite' | 'any'
+  /**
+   * Switch auto-battle off on arrival. A journey to a person or a camp ends
+   * with the player reading something; without this, auto-battle walks off to
+   * the nearest den before they can.
+   */
+  stopHere?: boolean
 }
 
 export interface Counters {
@@ -127,7 +173,8 @@ export interface Counters {
   species: BySpecies
 }
 
-export class Game {
+export class EcsSimulation implements Simulation {
+  static readonly PLAYER_ENTITY = 0
   readonly world: World
   readonly player: Player
   readonly enemies: Enemy[] = []
@@ -190,6 +237,12 @@ export class Game {
   bossCleared: Record<string, number> = {}
   questIndex = 0
   questProgress = 0
+  /**
+   * Whether the task at `questIndex` has been taken from the person who gives
+   * it. A task with no `from` needs no acceptance, so this only decides
+   * anything for the ones an NPC holds.
+   */
+  questTaken = false
   claimed = new Set<string>()
   /** Camps this character has found. Per-player progress, never world state. */
   discovered = new Set<string>(CAMPS.filter((c) => c.startDiscovered).map((c) => c.id))
@@ -208,19 +261,62 @@ export class Game {
   currentCamp: Camp | null = null
   /** The named place the player is standing in, if any. Drives the HUD label. */
   currentLandmark: Landmark | null = null
-  hooks: GameHooks = { log: () => {}, banner: () => {}, dirty: () => {} }
+  /** The person within speaking distance, if any. The HUD prompt reads it. */
+  nearbyNpc: Npc | null = null
+  /** Where auto-battle is walking, if the player pointed it somewhere. */
+  travel: TravelTarget | null = null
+  readonly components: ComponentStores = componentStores()
+  readonly spatial = new SpatialHash<Enemy>(256)
+  readonly revisions: Revisions = { inventory: 0, progression: 0, quests: 0, world: 0, combat: 0 }
 
-  private rand: Rng = rng(0xc0ffee)
+  private hookTarget: GameHooks = { log: () => {}, banner: () => {}, dirty: () => {} }
+  private eventQueue: DomainEvent[] = []
+
+  get hooks(): GameHooks {
+    return this.hookTarget
+  }
+
+  set hooks(target: GameHooks) {
+    this.hookTarget = {
+      log: (text, color) => {
+        this.eventQueue.push({ type: 'log', text, ...(color ? { color } : {}) })
+        target.log(text, color)
+      },
+      banner: (title, sub) => {
+        this.eventQueue.push({ type: 'banner', title, subtitle: sub })
+        target.banner(title, sub)
+      },
+      dirty: () => {
+        for (const key of Object.keys(this.revisions) as (keyof Revisions)[]) this.revisions[key]++
+        target.dirty()
+      },
+    }
+  }
+
+  private rand: Rng
+  private readonly uids = new UidSequence()
   private nextId = 1
   private view: ViewRect = { x0: -1e6, y0: -1e6, x1: 1e6, y1: 1e6 }
   private swingApplied = false
   private outOfCombat = 0
   /** Seconds until the next boss-window check; per frame would be waste. */
   private bossCheck = 0
-  private roamTarget: { x: number; y: number } | null = null
+  /** The route the player asked for, and the one auto-battle chose itself. */
+  private travelRoute: Route | null = null
+  private roamRoute: Route | null = null
+  private travelRetries = 0
+  /** Seconds before roaming tries to draw a route again. */
+  private roamRetry = 0
 
-  constructor(world = new World()) {
+  constructor(
+    world = new World(),
+    private readonly dependencies: SimulationDependencies = {
+      clock: { now: () => Date.now() },
+      rngFactory: { create: (seed) => rng(seed) },
+    },
+  ) {
     this.world = world
+    this.rand = dependencies.rngFactory.create(0xc0ffee)
     const start = CAMPS[0]!
     this.player = {
       x: start.x,
@@ -254,8 +350,10 @@ export class Game {
     }
     this.stats = this.recalc()
     this.player.hp = this.stats.maxHp
+    this.syncPlayerComponents()
     // Seed the world so the first screen isn't empty while nodes warm up.
     for (const node of this.world.nodes) this.fillNode(node, true)
+    this.rebuildSpatial()
   }
 
   /* ================= persistence ================= */
@@ -265,7 +363,7 @@ export class Game {
     return {
       v: SAVE_VERSION,
       seed: this.world.seed,
-      savedAt: Date.now(),
+      savedAt: this.dependencies.clock.now(),
       player: {
         x: p.x,
         y: p.y,
@@ -281,10 +379,11 @@ export class Game {
       },
       bag: this.bag.slice(),
       equipped: { ...this.equipped },
-      nextUid: uidMark(),
+      nextUid: this.uids.mark(),
       counters: { ...this.counters, species: { ...this.counters.species } },
       questIndex: this.questIndex,
       questProgress: this.questProgress,
+      questTaken: this.questTaken,
       claimed: [...this.claimed],
       discovered: [...this.discovered],
       seenLandmarks: [...this.seenLandmarks],
@@ -317,7 +416,7 @@ export class Game {
     for (let i = 0; i < BAG_SIZE; i++) this.bag[i] = s.bag[i] ?? null
     for (const slot of SLOTS) this.equipped[slot] = s.equipped[slot] ?? null
     // Before any fresh drop is rolled, or new uids collide with restored gear.
-    restoreUidMark(s.nextUid)
+    this.uids.restore(s.nextUid)
 
     // Copied rather than adopted: the save object outlives this call — the
     // offline ledger is still reading it — and counting a kill must not reach
@@ -325,6 +424,7 @@ export class Game {
     this.counters = { ...s.counters, species: { ...s.counters.species } }
     this.questIndex = s.questIndex
     this.questProgress = s.questProgress
+    this.questTaken = s.questTaken
     this.claimed = new Set(s.claimed)
     this.discovered = new Set(s.discovered)
     this.seenLandmarks = new Set(s.seenLandmarks)
@@ -340,7 +440,7 @@ export class Game {
     // The loot stream is fixed-seed and its position is not recoverable from the
     // closure, so reseed it. Without this every session rolls the same sequence
     // of drops from the top.
-    this.rand = rng((s.savedAt ^ 0x9e3779b1) >>> 0)
+    this.rand = this.dependencies.rngFactory.create((s.savedAt ^ 0x9e3779b1) >>> 0)
 
     this.recalc()
     // Transient combat state is never saved; a character mid-death returns whole.
@@ -543,8 +643,8 @@ export class Game {
     return true
   }
 
-  setView(x0: number, y0: number, x1: number, y1: number) {
-    this.view = { x0, y0, x1, y1 }
+  setView(view: ViewRect) {
+    this.view = { ...view }
   }
 
   /* ================= spawning ================= */
@@ -583,7 +683,7 @@ export class Game {
     // Body size follows the art it is wearing, so an apex that draws at 1.7x
     // also collides and reaches at 1.7x rather than fighting from inside a
     // sprite three times its hitbox.
-    const sizeMult = beastSheetScale(spec.sheet)
+    const sizeMult = BEAST_GEOMETRY[spec.sheet].renderScale
     const e: Enemy = {
       id: this.nextId++,
       kind: spec.kind,
@@ -626,6 +726,8 @@ export class Game {
       bossId: spec.bossId,
     }
     this.enemies.push(e)
+    this.syncEnemyComponents(e)
+    this.spatial.insert(e)
     return e
   }
 
@@ -662,7 +764,7 @@ export class Game {
     this.bossCheck -= dt
     if (this.bossCheck > 0) return
     this.bossCheck = 1
-    const window = bossWindow(Date.now())
+    const window = bossWindow(this.dependencies.clock.now())
     for (const def of BOSSES) {
       if (this.bossCleared[def.id] === window) continue
       if (this.enemies.some((e) => e.alive && e.bossId === def.id)) continue
@@ -697,9 +799,10 @@ export class Game {
 
   /* ================= main step ================= */
 
-  update(dt: number, moveX: number, moveY: number) {
+  update(dt: number, input: InputFrame) {
     this.time += dt
     const p = this.player
+    const { moveX, moveY } = input
 
     for (const a of this.abilities) a.cd = Math.max(0, a.cd - dt)
 
@@ -709,16 +812,27 @@ export class Game {
       // Fire you already lit keeps burning while you are down.
       this.stepGrounds(dt)
       this.stepTransient(dt)
+      this.syncComponentState()
       return
     }
 
     this.currentCamp = this.world.campAt(p.x, p.y)
-    if (this.currentCamp && !this.isDiscovered(this.currentCamp)) this.discoverCamp(this.currentCamp)
+    if (this.currentCamp) this.enterCamp(this.currentCamp)
     this.currentLandmark = this.world.landmarkAt(p.x, p.y)
     if (this.currentLandmark && !this.seenLandmarks.has(this.currentLandmark.id)) {
       this.findLandmark(this.currentLandmark)
     }
+    this.nearbyNpc = this.world.npcAt(p.x, p.y)
     this.trackGround()
+
+    // Taking the stick, or switching auto-battle off, takes the wheel back.
+    if (this.travel) {
+      if (!p.auto) this.cancelTravel('Travel stopped.')
+      else if (Math.hypot(moveX, moveY) > 0.05) {
+        p.auto = false
+        this.cancelTravel('Travel stopped.')
+      }
+    }
 
     if (p.auto) this.stepAuto(dt)
     else this.stepManual(dt, moveX, moveY)
@@ -730,6 +844,7 @@ export class Game {
     this.stepSpawns()
     this.stepBosses(dt)
     this.stepTransient(dt)
+    this.syncComponentState()
   }
 
   private stepManual(dt: number, mx: number, my: number) {
@@ -747,7 +862,7 @@ export class Game {
     p.dir = facingToDir(p.facing)
     // Standing still with a beast in reach still swings — the warrior never
     // waits for a button.
-    const t = this.nearestEnemy(p.x, p.y, this.swingRange + 26, true)
+    const t = this.nearestEnemy({ x: p.x, y: p.y, maxDistance: this.swingRange + 26, huntable: true })
     if (t && !p.moving) p.facing = Math.atan2(t.y - p.y, t.x - p.x)
     if (t) p.dir = facingToDir(p.facing)
   }
@@ -758,14 +873,31 @@ export class Game {
     const sw = this.abilities[1]!
     if (sw.cd <= 0 && p.hp < p.maxHp * 0.45) this.useAbility('secondwind')
 
+    // A journey outranks the hunt. `stepSwing` still answers anything that
+    // closes to arm's length, so walking through a pack costs it blood.
+    if (this.travel) {
+      const ww = this.abilities[0]!
+      if (ww.cd <= 0 && this.countEnemiesWithin(p.x, p.y, this.whirlwindRadius) >= 3) {
+        this.useAbility('whirlwind')
+      }
+      this.stepTravel(dt)
+      p.dir = facingToDir(p.facing)
+      return
+    }
+
     let target = this.enemyById(p.targetId)
-    if (!target || !target.alive || target.state === 'return' || dist(p.x, p.y, target.x, target.y) > 1100) {
-      target = this.nearestEnemy(p.x, p.y, 1000, true, true)
+    const stale =
+      !target ||
+      !target.alive ||
+      target.state === 'return' ||
+      dist(p.x, p.y, target.x, target.y) > AUTO.drop
+    if (stale) {
+      target = this.pickTarget()
       p.targetId = target ? target.id : -1
     }
 
     if (target) {
-      this.roamTarget = null
+      this.roamRoute = null
       const d = dist(p.x, p.y, target.x, target.y)
       const reach = this.swingRange * 0.62 + target.radius
       p.facing = Math.atan2(target.y - p.y, target.x - p.x)
@@ -792,32 +924,358 @@ export class Game {
     p.dir = facingToDir(p.facing)
   }
 
-  /** With nothing in sight, walk toward the nearest populated den. */
+  /**
+   * What auto-battle fights next.
+   *
+   * With a task asking for a species, that species is worth crossing ground
+   * for and nothing else is. Anything close enough to be in the way is still
+   * fair game — the rule is a preference, not a blindfold.
+   */
+  private pickTarget(): Enemy | null {
+    const p = this.player
+    const plan = this.huntPlan()
+    if (plan.want) {
+      const wanted = this.nearestEnemy({
+        x: p.x,
+        y: p.y,
+        maxDistance: AUTO.taskSeek,
+        huntable: true,
+        skipBosses: true,
+        only: plan.want,
+      })
+      if (wanted) return wanted
+    }
+    return this.nearestEnemy({
+      x: p.x,
+      y: p.y,
+      maxDistance: plan.focused ? AUTO.straySeek : AUTO.seek,
+      huntable: true,
+      skipBosses: true,
+    })
+  }
+
+  /**
+   * What the task in hand makes of the hunt.
+   *
+   * `want` is the species worth crossing ground for. `focused` says the task
+   * has somewhere to be, which shortens the leash on everything else — a task
+   * to reach a camp names no species, and the walk there is the progress.
+   *
+   * A body count takes anything, so it narrows nothing. An apex is not
+   * auto-battle's business at all: `skipBosses` keeps it away from one, and its
+   * task must not drag it there by the collar either.
+   */
+  private huntPlan(): { want: EnemyKind | 'elite' | null; focused: boolean } {
+    const q = this.quest
+    if (!q) return { want: null, focused: false }
+    if (q.objective.type === 'reach') return { want: null, focused: true }
+    const kind = q.objective.kind
+    if (kind === 'any' || kind === 'boss') return { want: null, focused: false }
+    return { want: kind, focused: true }
+  }
+
+  /* ================= travel ================= */
+
+  /**
+   * Point auto-battle at somewhere. It walks the route and swings at whatever
+   * comes into reach, but it chases nothing on the way — a journey that stops
+   * for every wolf is not a journey.
+   */
+  travelTo(t: TravelTarget): boolean {
+    const p = this.player
+    // Starting a journey that is already over would switch auto-battle on and
+    // straight back off, and log both halves of a walk nobody took.
+    if (dist(p.x, p.y, t.x, t.y) <= t.arrive) {
+      this.hooks.log(`You are already at ${t.label}.`, '#9ad0ff')
+      return false
+    }
+    const route = this.routeTo(t.x, t.y)
+    if (!route) {
+      this.hooks.log(`There is no way through to ${t.label}.`, '#d8746c')
+      return false
+    }
+    this.travel = t
+    this.travelRoute = route
+    this.travelRetries = 0
+    this.roamRoute = null
+    p.auto = true
+    p.targetId = -1
+    this.hooks.log(`Travelling to ${t.label}.`, '#9ad0ff')
+    this.hooks.dirty()
+    return true
+  }
+
+  /** Give up on the journey without reaching it. */
+  cancelTravel(reason?: string) {
+    this.endTravel(false, reason)
+  }
+
+  /**
+   * End the journey. `arrived` means it ended at the place it was going, which
+   * is the only case that obeys `stopHere`.
+   *
+   * A task that finishes on arrival counts as arriving. Otherwise walking into
+   * a camp completes the task, the task cancels the journey, and auto-battle
+   * marches back out again before the player has read the banner.
+   */
+  private endTravel(arrived: boolean, reason?: string) {
+    const t = this.travel
+    if (!t) return
+    this.travel = null
+    this.travelRoute = null
+    if (arrived && t.stopHere) {
+      this.player.auto = false
+      this.player.targetId = -1
+      this.roamRoute = null
+    }
+    if (reason) this.hooks.log(reason, '#9ad0ff')
+    this.hooks.dirty()
+  }
+
+  private arriveTravel() {
+    const t = this.travel
+    if (!t) return
+    this.endTravel(true, `Arrived at ${t.label}.`)
+  }
+
+  private stepTravel(dt: number) {
+    const p = this.player
+    const t = this.travel!
+    if (dist(p.x, p.y, t.x, t.y) <= t.arrive) {
+      this.arriveTravel()
+      return
+    }
+    // The quarry found on the road is the quarry. Stop here and fight it.
+    if (t.hunt && this.huntNear(t.hunt, AUTO.straySeek)) {
+      this.arriveTravel()
+      return
+    }
+    if (!this.travelRoute) {
+      this.arriveTravel()
+      return
+    }
+    if (!this.stepRoute(dt, this.travelRoute)) this.repath()
+  }
+
+  private repath() {
+    const t = this.travel
+    if (!t) return
+    this.travelRetries++
+    const route = this.travelRetries <= 2 ? this.routeTo(t.x, t.y) : null
+    if (!route) {
+      this.cancelTravel(`Lost the way to ${t.label}.`)
+      return
+    }
+    this.travelRoute = route
+  }
+
+  /** A route to a world point, ready to be walked. Null if there is no way. */
+  private routeTo(x: number, y: number): Route | null {
+    const path = this.world.findPath(this.player.x, this.player.y, x, y)
+    return path ? { x, y, path, at: 0, stuck: 0 } : null
+  }
+
+  /**
+   * One step along a route. Returns false when the walker has been held against
+   * something for long enough that the route needs redrawing — a corner the
+   * collision box will not round, or a shore the clearance margin missed.
+   *
+   * Travel and roaming both walk through here, so a beast the player sent
+   * somewhere and a beast that chose for itself move the same way.
+   */
+  private stepRoute(dt: number, r: Route): boolean {
+    const p = this.player
+    while (r.at < r.path.length - 1) {
+      const wp = r.path[r.at]!
+      if (dist(p.x, p.y, wp.x, wp.y) > 24) break
+      r.at++
+    }
+    const wp = r.path[r.at] ?? { x: r.x, y: r.y }
+    const a = Math.atan2(wp.y - p.y, wp.x - p.x)
+    p.facing = a
+    const wasX = p.x
+    const wasY = p.y
+    this.moveEntity(p, Math.cos(a) * this.moveSpeed * dt, Math.sin(a) * this.moveSpeed * dt)
+    p.moving = true
+    p.anim += dt * 8
+    if (dist(p.x, p.y, wasX, wasY) >= this.moveSpeed * dt * 0.3) {
+      r.stuck = 0
+      return true
+    }
+    r.stuck += dt
+    return r.stuck <= 1.2
+  }
+
+  /** Is one of the beasts this journey is for already within reach of a fight? */
+  private huntNear(hunt: EnemyKind | 'elite' | 'any', range: number): boolean {
+    const p = this.player
+    for (const e of this.enemies) {
+      if (!e.alive || e.bossId) continue
+      const match = hunt === 'any' || (hunt === 'elite' ? e.elite : e.kind === hunt)
+      if (!match) continue
+      if (dist(p.x, p.y, e.x, e.y) <= range) return true
+    }
+    return false
+  }
+
+  /**
+   * Where the work for a task is. The tracker and the Tasks panel both offer to
+   * walk there, so the answer is derived here once rather than in the HUD.
+   */
+  questDestination(q: QuestDef): TravelTarget | null {
+    // A task nobody has handed over yet points at the person holding it.
+    if (q.from && q === this.offeredQuest) {
+      const npc = npcById(q.from)
+      if (!npc) return null
+      return {
+        x: npc.x,
+        y: npc.y,
+        label: npc.name,
+        arrive: npc.radius * 0.6,
+        questId: q.id,
+        stopHere: true,
+      }
+    }
+    const objective = q.objective
+    if (objective.type === 'reach') {
+      const camp = CAMPS.find((c) => c.id === objective.camp)
+      if (!camp) return null
+      return {
+        x: camp.x,
+        y: camp.y,
+        label: camp.name,
+        arrive: camp.radius * 0.5,
+        questId: q.id,
+        stopHere: true,
+      }
+    }
+    const want = objective.kind
+    if (want === 'boss') {
+      const boss = this.nearestBoss()
+      if (!boss) return null
+      return { x: boss.x, y: boss.y, label: boss.name, arrive: 140, questId: q.id }
+    }
+    const node = this.nearestNodeFor(want)
+    if (!node) return null
+    const region = this.world.regionAt(node.x, node.y)
+    const label =
+      want === 'any'
+        ? `the hunting in ${region.name}`
+        : want === 'elite'
+          ? `the elite ground in ${region.name}`
+          : `the ${ENEMIES[want].plural.toLowerCase()} of ${region.name}`
+    return { x: node.x, y: node.y, label, arrive: 90, questId: q.id, hunt: want }
+  }
+
+  /** The nearest den that breeds what the task wants, populated ones first. */
+  private nearestNodeFor(want: EnemyKind | 'elite' | 'any'): SpawnNode | null {
+    let best: SpawnNode | null = null
+    let bestScore = Infinity
+    for (const n of this.world.nodes) {
+      const match = want === 'any' || (want === 'elite' ? n.elite : n.kind === want)
+      if (!match) continue
+      // An empty den is still the right place; it simply loses a tie.
+      const score = dist(this.player.x, this.player.y, n.x, n.y) + (n.alive.length ? 0 : 400)
+      if (score < bestScore) {
+        bestScore = score
+        best = n
+      }
+    }
+    return best
+  }
+
+  private nearestBoss(): Enemy | null {
+    let best: Enemy | null = null
+    let bestD = Infinity
+    for (const e of this.enemies) {
+      if (!e.alive || !e.bossId) continue
+      const d = dist(this.player.x, this.player.y, e.x, e.y)
+      if (d < bestD) {
+        bestD = d
+        best = e
+      }
+    }
+    return best
+  }
+
+  /**
+   * With nothing in reach, walk to where the work is.
+   *
+   * The task comes first. A character that always walks to the nearest den
+   * finishes a task only by accident, and drifts off the one it was sent to as
+   * soon as the local beasts are dead. With no task to serve, the nearest
+   * populated den is still the answer.
+   */
   private roam(dt: number) {
     const p = this.player
-    if (!this.roamTarget || dist(p.x, p.y, this.roamTarget.x, this.roamTarget.y) < 90) {
-      let best: SpawnNode | null = null
-      let bestD = Infinity
-      for (const n of this.world.nodes) {
-        if (!n.alive.length) continue
-        const d = dist(p.x, p.y, n.x, n.y)
-        if (d < bestD) {
-          bestD = d
-          best = n
-        }
-      }
-      this.roamTarget = best ? { x: best.x, y: best.y } : null
-    }
-    if (!this.roamTarget) {
+    this.roamRetry = Math.max(0, this.roamRetry - dt)
+    const r = this.roamRoute
+    if ((!r || dist(p.x, p.y, r.x, r.y) < AUTO.arrive) && this.roamRetry <= 0) this.pickRoam()
+    const route = this.roamRoute
+    if (!route) {
+      // Standing on the ground it wanted, waiting for the next one to walk out
+      // of the den. Better than setting off for somewhere else.
       p.moving = false
       p.anim += dt * 3
       return
     }
-    const a = Math.atan2(this.roamTarget.y - p.y, this.roamTarget.x - p.x)
-    p.facing = a
-    this.moveEntity(p, Math.cos(a) * this.moveSpeed * dt, Math.sin(a) * this.moveSpeed * dt)
-    p.moving = true
-    p.anim += dt * 8
+    // Held up: drop the route and draw a fresh one from where we stand.
+    if (!this.stepRoute(dt, route)) this.roamRoute = null
+  }
+
+  /**
+   * Draw a route to the work. Failure is throttled, because a place with no
+   * route costs a whole search of the map to find that out, and a character
+   * standing next to one would pay it in every frame.
+   */
+  private pickRoam() {
+    const p = this.player
+    const goal = this.autoGoal()
+    this.roamRoute = null
+    this.roamRetry = 1
+    if (!goal || dist(p.x, p.y, goal.x, goal.y) < AUTO.arrive) return
+    this.roamRoute = this.routeTo(goal.x, goal.y)
+    // No way through to the task's ground is not a reason to stand still.
+    if (!this.roamRoute) {
+      const den = this.nearestPopulatedNode()
+      if (den && dist(p.x, p.y, den.x, den.y) >= AUTO.arrive) {
+        this.roamRoute = this.routeTo(den.x, den.y)
+      }
+    }
+    if (this.roamRoute) this.roamRetry = 0
+  }
+
+  /**
+   * Where auto-battle should be when there is nothing to fight.
+   *
+   * A task that is only on offer is not counted: taking it needs a
+   * conversation, and walking to the giver to stand there would end the hunt
+   * rather than advance it. An apex is not counted either, for the same reason
+   * auto-battle never targets one.
+   */
+  private autoGoal(): { x: number; y: number } | null {
+    const q = this.quest
+    const huntsBoss = q?.objective.type === 'kill' && q.objective.kind === 'boss'
+    if (q && !huntsBoss) {
+      const dest = this.questDestination(q)
+      if (dest) return dest
+    }
+    return this.nearestPopulatedNode()
+  }
+
+  private nearestPopulatedNode(): SpawnNode | null {
+    const p = this.player
+    let best: SpawnNode | null = null
+    let bestD = Infinity
+    for (const n of this.world.nodes) {
+      if (!n.alive.length) continue
+      const d = dist(p.x, p.y, n.x, n.y)
+      if (d < bestD) {
+        bestD = d
+        best = n
+      }
+    }
+    return best
   }
 
   private stepSwing(dt: number) {
@@ -834,7 +1292,7 @@ export class Game {
       return
     }
     if (p.attackCd > 0) return
-    const target = this.nearestEnemy(p.x, p.y, this.swingRange + 20, true)
+    const target = this.nearestEnemy({ x: p.x, y: p.y, maxDistance: this.swingRange + 20, huntable: true })
     if (!target) return
     p.targetId = target.id
     p.facing = Math.atan2(target.y - p.y, target.x - p.x)
@@ -979,7 +1437,7 @@ export class Game {
       g.next -= dt
       if (g.next <= 0) {
         g.next += EMBER.tick
-        for (const e of this.enemies) {
+        for (const e of this.spatial.queryRadius(g.x, g.y, g.radius + 80)) {
           if (!e.alive || e.state === 'return') continue
           if (dist(e.x, e.y, g.x, g.y) > g.radius + e.radius) continue
           this.damageEnemy(e, { amount: g.perTick, crit: false }, 'burn')
@@ -1014,11 +1472,11 @@ export class Game {
       this.stepEnemy(e, dt, d)
     }
 
-    // Soft separation so a pack surrounds rather than stacks into one sprite.
-    for (let i = 0; i < active.length; i++) {
-      const a = active[i]!
-      for (let j = i + 1; j < active.length; j++) {
-        const b = active[j]!
+    // Soft separation uses neighboring spatial cells instead of an N² scan.
+    this.spatial.rebuild(active)
+    for (const a of active) {
+      for (const b of this.spatial.queryRadius(a.x, a.y, a.radius * 2 + 80)) {
+        if (b.id <= a.id) continue
         const dx = b.x - a.x
         const dy = b.y - a.y
         const min = a.radius + b.radius
@@ -1401,7 +1859,7 @@ export class Game {
       node.respawnAt = this.time + (e.elite ? 45 : 9 + this.rand() * 8)
     }
     if (e.bossId) {
-      this.bossCleared[e.bossId] = bossWindow(Date.now())
+      this.bossCleared[e.bossId] = bossWindow(this.dependencies.clock.now())
       const def = bossById(e.bossId)
       if (def) this.hooks.banner(def.name, `${def.title} — felled`)
     }
@@ -1487,7 +1945,7 @@ export class Game {
     // gap widens, so a lucky tap on something far above you still yields gear
     // you could have earned rather than a jackpot.
     const ilvl = e.level * scale + this.player.level * (1 - scale)
-    const item = makeItem(this.rand, Math.max(1, Math.round(ilvl) + this.rand.int(-1, 2)), rarity)
+    const item = makeItem(this.rand, Math.max(1, Math.round(ilvl) + this.rand.int(-1, 2)), rarity, this.uids)
     this.addItem(item)
   }
 
@@ -1512,7 +1970,7 @@ export class Game {
     const def = this.rand.pick(pool)
     this.foundUniques.add(def.id)
     this.hooks.banner('Relic Found', def.name)
-    this.addItem(makeUnique(def, this.player.level))
+    this.addItem(makeUnique(def, this.player.level, this.uids))
   }
 
   addItem(item: Item) {
@@ -1673,8 +2131,42 @@ export class Game {
 
   /* ---- quests ---- */
 
-  get quest() {
-    return QUESTS[this.questIndex] ?? null
+  /**
+   * The task in progress, and the one place that decides whether progress
+   * counts. A task an NPC holds is not this task until the player takes it, so
+   * kills, camps and the offline ledger all stop crediting it through one
+   * getter rather than through a check at each of the three.
+   */
+  get quest(): QuestDef | null {
+    const q = QUESTS[this.questIndex] ?? null
+    if (!q) return null
+    return q.from && !this.questTaken ? null : q
+  }
+
+  /** The task a person is holding out, which the player has not taken yet. */
+  get offeredQuest(): QuestDef | null {
+    const q = QUESTS[this.questIndex] ?? null
+    if (!q) return null
+    return q.from && !this.questTaken ? q : null
+  }
+
+  /** The task this person is holding out right now, if it is theirs to give. */
+  offerFrom(npc: Npc): QuestDef | null {
+    const q = this.offeredQuest
+    return q && q.from === npc.id ? q : null
+  }
+
+  /** Take the offered task. Nothing done before this counts toward it. */
+  acceptQuest() {
+    const q = this.offeredQuest
+    if (!q) return
+    this.questTaken = true
+    this.questProgress = 0
+    // The journey to the giver ends at the giver.
+    if (this.travel?.questId === q.id) this.endTravel(true)
+    this.hooks.banner('Task Accepted', q.name)
+    this.hooks.log(`New task: ${q.name}`, '#f2c14e')
+    this.hooks.dirty()
   }
 
   get questGoal(): number {
@@ -1712,27 +2204,42 @@ export class Game {
     this.hooks.dirty()
   }
 
-  private discoverCamp(camp: Camp) {
-    this.discovered.add(camp.id)
-    this.hooks.banner('Camp Discovered', camp.name)
-    this.hooks.log(`Discovered ${camp.name}`, '#f2c14e')
+  /**
+   * Standing in a camp. Discovery happens once; the task check happens every
+   * time. A player who walked into Thornrest before anyone asked them to would
+   * otherwise hold a task that no later visit could ever finish.
+   */
+  private enterCamp(camp: Camp) {
+    if (!this.discovered.has(camp.id)) {
+      this.discovered.add(camp.id)
+      this.hooks.banner('Camp Discovered', camp.name)
+      this.hooks.log(`Discovered ${camp.name}`, '#f2c14e')
+      this.hooks.dirty()
+    }
     const q = this.quest
     if (q && q.objective.type === 'reach' && q.objective.camp === camp.id) {
       this.questProgress = 1
       this.completeQuest()
     }
-    this.hooks.dirty()
   }
 
   private completeQuest() {
     const q = this.quest
     if (!q) return
     this.counters.quests++
+    // Finishing the task is the end of the journey it was for, and it counts as
+    // arriving: a camp reached is a camp reached, whichever check saw it first.
+    if (this.travel?.questId === q.id) this.endTravel(true)
     this.grantReward(q.reward, `Quest Complete`, q.name)
     this.questIndex++
     this.questProgress = 0
-    const next = this.quest
-    if (next) this.hooks.log(`New task: ${next.name}`, '#f2c14e')
+    this.questTaken = false
+    const next = QUESTS[this.questIndex] ?? null
+    if (next && !next.from) this.hooks.log(`New task: ${next.name}`, '#f2c14e')
+    else if (next) {
+      const who = npcById(next.from!)
+      this.hooks.log(`Speak to ${who?.name ?? 'the camp'} for the next task.`, '#f2c14e')
+    }
     this.hooks.dirty()
   }
 
@@ -1740,7 +2247,7 @@ export class Game {
     if (reward.xp) this.gainXp(reward.xp)
     if (reward.gold) this.gainGold(reward.gold)
     if (reward.item) {
-      const item = makeItem(this.rand, reward.item.ilvl, reward.item.rarity, reward.item.base)
+      const item = makeItem(this.rand, reward.item.ilvl, reward.item.rarity, this.uids, reward.item.base)
       this.addItem(item)
     }
     this.hooks.banner(title, sub)
@@ -1860,7 +2367,9 @@ export class Game {
     p.invuln = 2
     p.webbed = 0
     p.targetId = -1
-    this.roamTarget = null
+    this.roamRoute = null
+    // The route started somewhere else. Waking at a camp makes it nonsense.
+    this.cancelTravel()
     for (const e of this.enemies) {
       if (isEngaged(e.state)) this.setEnemyState(e, 'return')
     }
@@ -1885,19 +2394,23 @@ export class Game {
    * reach still works, so choosing to fight a boss stays the player's call and
    * only the choosing is taken away from the robot.
    */
-  nearestEnemy(
-    x: number,
-    y: number,
-    maxDist: number,
-    huntable: boolean,
-    skipBosses = false,
-  ): Enemy | null {
+  nearestEnemy(options: {
+    x: number
+    y: number
+    maxDistance: number
+    huntable?: boolean
+    skipBosses?: boolean
+    /** Only this species, or only elites. Left out, anything counts. */
+    only?: EnemyKind | 'elite'
+  }): Enemy | null {
+    const { x, y, maxDistance, huntable = false, skipBosses = false, only } = options
     let best: Enemy | null = null
-    let bestD = maxDist
-    for (const e of this.enemies) {
+    let bestD = maxDistance
+    for (const e of this.spatial.queryRadius(x, y, maxDistance + 80)) {
       if (!e.alive) continue
       if (skipBosses && e.bossId) continue
       if (huntable && e.state === 'return') continue
+      if (only && (only === 'elite' ? !e.elite : e.kind !== only)) continue
       const d = dist(x, y, e.x, e.y) - e.radius
       if (d < bestD) {
         bestD = d
@@ -1909,10 +2422,161 @@ export class Game {
 
   countEnemiesWithin(x: number, y: number, r: number): number {
     let n = 0
-    for (const e of this.enemies) {
+    for (const e of this.spatial.queryRadius(x, y, r + 80)) {
       if (e.alive && e.state !== 'return' && dist(x, y, e.x, e.y) <= r + e.radius) n++
     }
     return n
+  }
+
+  enemiesInRect(view: ViewRect, padding = 0): readonly Enemy[] {
+    return this.spatial.queryRect(
+      view.x0 - padding,
+      view.y0 - padding,
+      view.x1 + padding,
+      view.y1 + padding,
+    )
+  }
+
+  get state(): GameSnapshot {
+    return this.snapshot()
+  }
+
+  snapshot(): Readonly<GameSnapshot> {
+    const cloneItem = (item: Item | null): Item | null =>
+      item ? { ...item, stats: { ...item.stats } } : null
+    return Object.freeze({
+      player: Object.freeze({ ...this.player }),
+      enemies: Object.freeze(this.enemies.map((enemy) => Object.freeze({ ...enemy }))),
+      bag: Object.freeze(this.bag.map(cloneItem)),
+      equipped: Object.freeze({
+        weapon: cloneItem(this.equipped.weapon),
+        head: cloneItem(this.equipped.head),
+        chest: cloneItem(this.equipped.chest),
+        hands: cloneItem(this.equipped.hands),
+        feet: cloneItem(this.equipped.feet),
+        ring: cloneItem(this.equipped.ring),
+      }),
+      questIndex: this.questIndex,
+      questProgress: this.questProgress,
+      counters: Object.freeze({
+        ...this.counters,
+        species: Object.freeze({ ...this.counters.species }),
+      }),
+      travel: this.travel ? Object.freeze({ ...this.travel }) : null,
+      revisions: Object.freeze({ ...this.revisions }),
+    })
+  }
+
+  dispatch(command: GameCommand): CommandResult {
+    switch (command.type) {
+      case 'toggle-auto':
+        this.player.auto = !this.player.auto
+        this.player.targetId = -1
+        if (!this.player.auto) this.cancelTravel()
+        this.hooks.dirty()
+        return { ok: true }
+      case 'use-ability':
+        return { ok: this.useAbility(command.ability), reason: 'Ability is unavailable.' }
+      case 'travel-to':
+        return { ok: this.travelTo(command.target), reason: 'No route is available.' }
+      case 'cancel-travel':
+        this.cancelTravel('Travel stopped.')
+        return { ok: true }
+      case 'equip': {
+        const before = this.bag[command.bagIndex]
+        this.equipFromBag(command.bagIndex)
+        return { ok: before !== null && before !== undefined, reason: 'No item is in that bag slot.' }
+      }
+      case 'unequip': {
+        const before = this.equipped[command.slot]
+        this.unequip(command.slot)
+        return { ok: before !== null, reason: 'That equipment slot is empty.' }
+      }
+      case 'sell': {
+        const before = this.bag[command.bagIndex]
+        this.sellFromBag(command.bagIndex)
+        return { ok: !!before && !before.unique, reason: 'That item cannot be sold.' }
+      }
+      case 'choose-talent':
+        return { ok: this.chooseTalent(command.talentId), reason: 'That talent cannot be chosen.' }
+      case 'respec':
+        return { ok: this.respec(), reason: 'The respec is unavailable.' }
+      case 'accept-quest': {
+        const offered = this.offeredQuest
+        this.acceptQuest()
+        return { ok: offered !== null, reason: 'No task is on offer.' }
+      }
+      case 'claim-milestone':
+        return { ok: this.claimMilestone(command.milestoneId), reason: 'That reward is unavailable.' }
+    }
+  }
+
+  drainEvents(): readonly DomainEvent[] {
+    const events = this.eventQueue
+    this.eventQueue = []
+    return events
+  }
+
+  private rebuildSpatial() {
+    this.spatial.rebuild(this.enemies.filter((enemy) => enemy.alive))
+  }
+
+  private syncPlayerComponents() {
+    const id = EcsSimulation.PLAYER_ENTITY
+    const player = this.player
+    this.components.transform.set(id, { x: player.x, y: player.y, facing: player.facing })
+    this.components.motion.set(id, { vx: player.vx, vy: player.vy, moving: player.moving })
+    this.components.collider.set(id, { radius: player.radius })
+    this.components.combatant.set(id, {
+      hp: player.hp,
+      maxHp: player.maxHp,
+      damage: this.stats.damage,
+      attackRange: this.swingRange,
+    })
+    this.components.renderable.set(id, { sheet: 'warrior', scale: 1 })
+    this.components.statusEffects.set(id, {
+      webbed: player.webbed,
+      invulnerable: player.invuln,
+      hitFlash: player.hitFlash,
+    })
+    this.components.playerControl.set(id, { auto: player.auto, targetId: player.targetId })
+  }
+
+  private syncEnemyComponents(enemy: Enemy) {
+    const id = enemy.id
+    this.components.transform.set(id, { x: enemy.x, y: enemy.y, facing: enemy.facing })
+    this.components.motion.set(id, { vx: enemy.vx, vy: enemy.vy, moving: enemy.moving })
+    this.components.collider.set(id, { radius: enemy.radius })
+    this.components.combatant.set(id, {
+      hp: enemy.hp,
+      maxHp: enemy.maxHp,
+      damage: enemy.dmg,
+      attackRange: enemy.attackRange,
+    })
+    this.components.renderable.set(id, { sheet: enemy.sheet, scale: enemy.scale })
+    this.components.enemyAi.set(id, {
+      kind: enemy.kind,
+      state: enemy.state,
+      aggroRange: enemy.aggroRange,
+      leash: enemy.leash,
+    })
+    this.components.spawnLink.set(id, { nodeId: enemy.nodeId, anchorX: enemy.ax, anchorY: enemy.ay })
+    this.components.statusEffects.set(id, { webbed: 0, invulnerable: 0, hitFlash: enemy.hitFlash })
+  }
+
+  private syncComponentState() {
+    this.syncPlayerComponents()
+    const live = new Set<number>([EcsSimulation.PLAYER_ENTITY])
+    for (const enemy of this.enemies) {
+      if (!enemy.alive) continue
+      live.add(enemy.id)
+      this.syncEnemyComponents(enemy)
+    }
+    for (const store of Object.values(this.components)) {
+      for (const id of store.keys()) if (!live.has(id)) store.delete(id)
+    }
+    this.rebuildSpatial()
+    this.revisions.combat++
   }
 
   /** Axis-separated movement so sliding along water edges feels natural. */

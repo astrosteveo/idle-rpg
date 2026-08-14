@@ -5,17 +5,22 @@
  * makes the fill cost independent of the display resolution.
  */
 import { clamp, hash2 } from '../core/math'
-import { CAMPS, TILE, WORLD_SIZE, type PropInstance } from '../game/world'
-import type { Game } from '../game/state'
+import { CAMPS, NPCS, TILE, WORLD_SIZE, type Npc, type PropInstance } from '../game/world'
+import type { EcsSimulation } from '../game/state'
 import type { Enemy } from '../game/types'
 import { CHUNK_PX, CHUNK_TILES, Terrain } from './terrain'
 import { drawTextCentered } from './font'
-import type { Art } from './sprites'
+import type { Art } from './assets'
 import type { Sheet } from './pixel'
+
+/** Sheet rows, as `facingToDir` numbers them. */
+const DIR_W = 1
+const DIR_E = 2
 
 type Drawable =
   | { y: number; sort: number; kind: 'prop'; prop: PropInstance }
   | { y: number; sort: number; kind: 'enemy'; enemy: Enemy }
+  | { y: number; sort: number; kind: 'npc'; npc: Npc }
   | { y: number; sort: number; kind: 'player' }
 
 export class Renderer {
@@ -34,7 +39,7 @@ export class Renderer {
 
   constructor(
     private canvas: HTMLCanvasElement,
-    private game: Game,
+    private game: EcsSimulation,
     private art: Art,
   ) {
     const ctx = canvas.getContext('2d', { alpha: false })
@@ -44,7 +49,7 @@ export class Renderer {
     const bctx = this.buf.getContext('2d', { alpha: false })
     if (!bctx) throw new Error('2d buffer unavailable')
     this.bctx = bctx
-    this.terrain = new Terrain(game.world)
+    this.terrain = new Terrain(game.world, art.terrainAtlas)
     this.camX = game.player.x
     this.camY = game.player.y
     this.resize()
@@ -297,11 +302,14 @@ export class Renderer {
     for (const p of g.world.propsInView(ox, oy, ox + this.vw, oy + this.vh)) {
       list.push({ y: p.y, sort: p.y, kind: 'prop', prop: p })
     }
-    for (const e of g.enemies) {
+    for (const e of g.enemiesInRect({ x0: ox, y0: oy, x1: ox + this.vw, y1: oy + this.vh }, 90)) {
       if (!e.alive) continue
-      if (e.x < ox - 70 || e.x > ox + this.vw + 70) continue
-      if (e.y < oy - 90 || e.y > oy + this.vh + 70) continue
       list.push({ y: e.y, sort: e.y, kind: 'enemy', enemy: e })
+    }
+    for (const n of NPCS) {
+      if (n.x < ox - 60 || n.x > ox + this.vw + 60) continue
+      if (n.y < oy - 90 || n.y > oy + this.vh + 60) continue
+      list.push({ y: n.y, sort: n.y, kind: 'npc', npc: n })
     }
     list.push({ y: g.player.y, sort: g.player.y + 0.5, kind: 'player' })
     list.sort((a, b) => a.sort - b.sort)
@@ -309,8 +317,46 @@ export class Renderer {
     for (const d of list) {
       if (d.kind === 'prop') this.drawProp(ctx, d.prop, ox, oy, time)
       else if (d.kind === 'enemy') this.drawEnemy(ctx, d.enemy, ox, oy)
+      else if (d.kind === 'npc') this.drawNpc(ctx, d.npc, ox, oy, time)
       else this.drawPlayer(ctx, ox, oy)
     }
+  }
+
+  /**
+   * A person, their name, and a mark over the head when they are holding work.
+   * The mark bobs: a still figure among still props is easy to walk past, and
+   * the one thing that moves is the one thing you look at.
+   */
+  private drawNpc(
+    ctx: CanvasRenderingContext2D,
+    n: Npc,
+    ox: number,
+    oy: number,
+    time: number,
+  ) {
+    const img = this.art.npcs[n.sprite]
+    const sx = Math.round(n.x - ox)
+    const sy = Math.round(n.y - oy)
+    ctx.fillStyle = 'rgba(0,0,0,0.3)'
+    pixelDisc(ctx, sx, sy, 11, 4)
+    ctx.drawImage(img, sx - Math.round(img.width / 2), sy - img.height)
+
+    const top = sy - img.height
+    if (this.game.offerFrom(n)) {
+      const bob = Math.round(Math.sin(time * 3.4) * 2)
+      const my = top - 18 + bob
+      ctx.fillStyle = '#0a0b11'
+      ctx.fillRect(sx - 3, my - 1, 6, 16)
+      // Tapered stem and a separate dot: a solid bar of gold reads as a post.
+      ctx.fillStyle = '#f2c14e'
+      ctx.fillRect(sx - 2, my, 4, 6)
+      ctx.fillRect(sx - 1, my + 6, 2, 3)
+      ctx.fillRect(sx - 2, my + 11, 4, 3)
+      ctx.fillStyle = '#fbe6a8'
+      ctx.fillRect(sx - 2, my, 2, 6)
+      ctx.fillRect(sx - 2, my + 11, 2, 3)
+    }
+    drawTextCentered(ctx, n.name, sx, top - 28, '#cbe4c9', 1)
   }
 
   private drawProp(
@@ -379,12 +425,19 @@ export class Renderer {
     else if (e.moving) col = Math.floor(e.anim) % 4
     else col = 0
 
+    // A beast with a sheet drawn at all 8 angles uses its facing octant. One
+    // drawn only from the side has no row for up or down, so it takes its row
+    // from the heading instead: asking such a sheet for `e.dir` left the two
+    // vertical octants on the eastward art, and each of those covers a wedge 45
+    // degrees wide, so a wolf running down and to the left ran facing right.
+    const row = sheet.directional ? e.dir : Math.cos(e.facing) < 0 ? DIR_W : DIR_E
+
     ctx.globalAlpha = e.state === 'return' ? 0.62 : 1
-    this.blitFrame(ctx, sheet, col, e.dir, sx, sy)
+    this.blitFrame(ctx, sheet, col, row, sx, sy)
     if (e.hitFlash > 0) {
       ctx.globalCompositeOperation = 'lighter'
       ctx.globalAlpha = clamp(e.hitFlash / 0.12, 0, 1) * 0.75
-      this.blitFrame(ctx, sheet, col, e.dir, sx, sy)
+      this.blitFrame(ctx, sheet, col, row, sx, sy)
       ctx.globalCompositeOperation = 'source-over'
     }
     ctx.globalAlpha = 1
@@ -525,7 +578,7 @@ export class Renderer {
   private drawNameplates(ctx: CanvasRenderingContext2D, ox: number, oy: number) {
     const g = this.game
     const targetId = g.player.targetId
-    for (const e of g.enemies) {
+    for (const e of g.enemiesInRect({ x0: ox, y0: oy, x1: ox + this.vw, y1: oy + this.vh }, 80)) {
       if (!e.alive) continue
       const engaged = e.state === 'chase' || e.state === 'attack'
       const hurt = e.hp < e.maxHp

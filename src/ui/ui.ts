@@ -22,14 +22,24 @@ import {
   type UniqueDef,
 } from '../game/content'
 import { itemScore, rarityName, statLines, uniqueDefOf } from '../game/loot'
-import type { Game } from '../game/state'
+import type { EcsSimulation } from '../game/state'
 import { ENEMY_KINDS, SLOTS, SLOT_LABEL, type EnemyKind, type Item } from '../game/types'
 import type { QuestObjective } from '../game/content'
-import { CAMPS, LANDMARKS, MAP_TILES, REGIONS, WORLD_SIZE, groundLevelOf } from '../game/world'
+import {
+  CAMPS,
+  LANDMARKS,
+  MAP_TILES,
+  REGIONS,
+  WORLD_SIZE,
+  groundLevelOf,
+  npcById,
+  type Npc,
+} from '../game/world'
 import { killsPerHour, type OfflineReport } from '../game/offline'
 import { OFFLINE } from '../game/content'
 import type { Renderer } from '../render/renderer'
-import { abilityIcon, itemIcon } from '../render/sprites'
+import { abilityIcon, itemIcon, warriorPortrait } from '../render/assets'
+import { bakeMinimap } from '../render/minimap'
 
 type Tab = 'bag' | 'quests' | 'rewards' | 'hunt' | 'talents' | 'beasts'
 
@@ -68,8 +78,11 @@ export class UI {
   private statLine!: HTMLElement
   private goldLabel!: HTMLElement
   private zoneLabel!: HTMLElement
+  private worldTitle!: HTMLElement
   private mmCtx!: CanvasRenderingContext2D
+  private minimapBase!: HTMLCanvasElement
   private tracker!: HTMLElement
+  private trackerGo!: HTMLButtonElement
   private abilityEls: {
     root: HTMLElement
     cd: HTMLElement
@@ -85,19 +98,27 @@ export class UI {
   private tip!: HTMLElement
   private death!: HTMLElement
   private report!: HTMLElement
+  private talkPrompt!: HTMLButtonElement
+  private dialog!: HTMLElement
 
   private tab: Tab = 'bag'
   private open = false
   private needsPanel = true
   private bannerTimer = 0
+  private banners: { title: string; sub: string }[] = []
+  /** Who the player is talking to, and how far through what they say. */
+  private dialogNpc: Npc | null = null
+  private dialogPage = 0
 
   constructor(
-    private game: Game,
+    private game: EcsSimulation,
     private renderer: Renderer,
   ) {
     this.root = document.getElementById('ui')!
     this.buildVitals()
     this.buildMap()
+    this.buildWorldTitle()
+    this.minimapBase = bakeMinimap(game.world)
     this.buildTracker()
     this.buildActions()
     this.buildLog()
@@ -106,6 +127,8 @@ export class UI {
     this.buildTooltip()
     this.buildDeath()
     this.buildReport()
+    this.buildTalk()
+    this.buildChromeToggle()
     const zone = el('div')
     zone.id = 'stickzone'
     const stick = el('div')
@@ -124,6 +147,7 @@ export class UI {
     }
 
     window.addEventListener('keydown', this.onKey)
+    this.show('bag')
   }
 
   /* ================= construction ================= */
@@ -132,6 +156,7 @@ export class UI {
     const box = el('div', 'frame')
     box.id = 'vitals'
     box.innerHTML = `
+      <img class="portrait" alt="Warrior portrait" src="${warriorPortrait()}">
       <div class="v-row">
         <span class="v-name">Wildmarch</span>
         <span class="v-class">Warrior</span>
@@ -169,11 +194,38 @@ export class UI {
     this.mmCtx = ctx
   }
 
+  private buildWorldTitle() {
+    const title = el('div')
+    title.id = 'world-title'
+    this.root.appendChild(title)
+    this.worldTitle = title
+  }
+
   private buildTracker() {
     const box = el('div', 'frame')
     box.id = 'tracker'
+    // The text is rewritten every frame; the button is not. A control that is
+    // recreated between the press and the release never gets its click.
+    const body = el('div')
+    const go = el('button', 'btn t-go')
+    go.addEventListener('click', () => this.travelToTask())
+    box.append(body, go)
     this.root.appendChild(box)
-    this.tracker = box
+    this.tracker = body
+    this.trackerGo = go
+  }
+
+  /** Walk to the current task's work, or stop walking if already on the way. */
+  private travelToTask() {
+    const g = this.game
+    if (g.travel) {
+      g.dispatch({ type: 'cancel-travel' })
+      return
+    }
+    const q = g.offeredQuest ?? g.quest
+    if (!q) return
+    const dest = g.questDestination(q)
+    if (dest) g.dispatch({ type: 'travel-to', target: dest })
   }
 
   private buildActions() {
@@ -182,14 +234,14 @@ export class UI {
     const abilities = el('div')
     abilities.id = 'abilities'
     for (const ab of this.game.abilities) {
-      const node = el('div', 'ability clickable')
+      const node = el('button', 'ability clickable')
       node.innerHTML = `<span class="key">${ab.key}</span>
         <img alt="${ab.name}" src="${abilityIcon(ab.id)}">
-        <div class="cd"></div><div class="cdtext"></div>`
+        <div class="cd"></div><div class="cdtext"></div><span class="ability-name">${ab.name}</span>`
       node.title = `${ab.name} — ${ab.desc}`
       node.addEventListener('pointerdown', (e) => {
         e.preventDefault()
-        this.game.useAbility(ab.id)
+        this.game.dispatch({ type: 'use-ability', ability: ab.id })
       })
       abilities.appendChild(node)
       this.abilityEls.push({
@@ -213,9 +265,9 @@ export class UI {
     mk('Bag', 'I', 'bag', 'bag')
     mk('Tasks', 'J', 'quests')
     mk('Rewards', 'R', 'rewards', 'rewards')
+    mk('Hunt', 'H', 'hunt')
     mk('Talents', 'T', 'talents', 'talents')
     mk('Beasts', 'B', 'beasts')
-    mk('Hunt', 'H', 'hunt')
 
     wrap.append(abilities, menu)
     this.root.appendChild(wrap)
@@ -292,6 +344,34 @@ export class UI {
     this.report = d
   }
 
+  private buildTalk() {
+    const prompt = el('button', 'btn')
+    prompt.id = 'talkprompt'
+    prompt.addEventListener('click', () => this.speak())
+    this.root.appendChild(prompt)
+    this.talkPrompt = prompt
+
+    const box = el('div', 'frame')
+    box.id = 'dialog'
+    this.root.appendChild(box)
+    this.dialog = box
+  }
+
+  private buildChromeToggle() {
+    const button = el('button', 'btn')
+    button.id = 'chrome-toggle'
+    button.type = 'button'
+    button.setAttribute('aria-label', 'Collapse interface')
+    button.textContent = '⌄'
+    button.addEventListener('click', () => {
+      const collapsed = this.root.classList.toggle('chrome-collapsed')
+      button.textContent = collapsed ? '⌃' : '⌄'
+      button.setAttribute('aria-label', collapsed ? 'Expand interface' : 'Collapse interface')
+      if (collapsed) this.hide()
+    })
+    this.root.appendChild(button)
+  }
+
   /**
    * The most-read screen in an idle game — a log of the hunt, not a receipt.
    * Shown once on load when the ledger found something worth reporting.
@@ -365,6 +445,101 @@ export class UI {
     this.report.classList.add('show')
   }
 
+  /* ================= talking to people ================= */
+
+  /**
+   * One key does the whole conversation: it starts it, and it turns the page.
+   * The lines a person says are chosen from the quest chain rather than stored,
+   * so a character who reloads mid-conversation hears the same thing again.
+   */
+  private speak() {
+    const g = this.game
+    if (!g.player.alive) return
+    if (this.dialogNpc) {
+      const lines = this.linesFor(this.dialogNpc)
+      if (this.dialogPage >= lines.length - 1) {
+        // A task held out waits for a deliberate answer. Anything else ends.
+        if (!g.offerFrom(this.dialogNpc)) this.closeDialog()
+        return
+      }
+      this.dialogPage++
+      this.renderDialog()
+      return
+    }
+    const npc = g.nearbyNpc
+    if (!npc) return
+    this.dialogNpc = npc
+    this.dialogPage = 0
+    this.renderDialog()
+  }
+
+  private closeDialog() {
+    this.dialogNpc = null
+    this.dialog.classList.remove('show')
+  }
+
+  /** What this person has to say, given where the quest chain stands. */
+  private linesFor(npc: Npc): string[] {
+    const g = this.game
+    if (g.offerFrom(npc)) return npc.intro
+    if (g.quest?.from === npc.id) return [npc.waiting]
+    return [npc.done]
+  }
+
+  private renderDialog() {
+    const npc = this.dialogNpc
+    if (!npc) return
+    const g = this.game
+    const lines = this.linesFor(npc)
+    const page = clamp(this.dialogPage, 0, lines.length - 1)
+    const last = page >= lines.length - 1
+    // The task is held out on the last page, so the offer arrives after the
+    // reason for it rather than on top of it.
+    const offer = last ? g.offerFrom(npc) : null
+
+    const box = this.dialog
+    box.innerHTML = ''
+    const who = el('div', 'd-who')
+    who.innerHTML = `${npc.name}<small>${npc.title}</small>`
+    box.appendChild(who)
+    box.appendChild(el('div', 'd-text', lines[page]!))
+
+    if (offer) {
+      const card = el('div', 'd-offer')
+      const goal = offer.objective.type === 'kill' ? offer.objective.count : 1
+      card.innerHTML = `<div class="ctitle">${offer.name}</div>
+        <div class="cdesc">${offer.desc}</div>
+        <div class="cdesc" style="margin-top:3px">${objectiveText(offer.objective, 0, goal)}</div>
+        <div class="crew">${rewardText(offer.reward)}</div>`
+      box.appendChild(card)
+    }
+
+    // The page count goes above the buttons: below them it hangs off the box
+    // and reads as part of the HUD underneath.
+    if (lines.length > 1) box.appendChild(el('div', 'd-page', `${page + 1} / ${lines.length}`))
+
+    const row = el('div', 'd-btns')
+    if (offer) {
+      const take = el('button', 'btn on')
+      take.textContent = 'Accept'
+      take.addEventListener('click', () => {
+        g.dispatch({ type: 'accept-quest' })
+        this.closeDialog()
+      })
+      const later = el('button', 'btn')
+      later.textContent = 'Not yet'
+      later.addEventListener('click', () => this.closeDialog())
+      row.append(take, later)
+    } else {
+      const next = el('button', 'btn')
+      next.innerHTML = last ? 'Farewell <span style="opacity:.5">G</span>' : 'Next <span style="opacity:.5">G</span>'
+      next.addEventListener('click', () => this.speak())
+      row.appendChild(next)
+    }
+    box.appendChild(row)
+    box.classList.add('show')
+  }
+
   /* ================= interaction ================= */
 
   private onKey = (e: KeyboardEvent) => {
@@ -375,22 +550,40 @@ export class UI {
     else if (k === 'h') this.toggle('hunt')
     else if (k === 't') this.toggle('talents')
     else if (k === 'b') this.toggle('beasts')
-    else if (k === 'escape') this.hide()
-    else if (k === 'q') this.game.useAbility('whirlwind')
-    else if (k === 'e') this.game.useAbility('secondwind')
+    else if (k === 'g') this.speak()
+    else if (k === 'escape') {
+      if (this.dialogNpc) this.closeDialog()
+      else this.hide()
+    }
+    else if (k === 'q') this.game.dispatch({ type: 'use-ability', ability: 'whirlwind' })
+    else if (k === 'e') this.game.dispatch({ type: 'use-ability', ability: 'secondwind' })
     else if (k === ' ') this.toggleAuto()
     else if (k === 'f') this.toggleAutoEquip()
   }
 
   private toggleAuto() {
     const p = this.game.player
-    p.auto = !p.auto
-    p.targetId = -1
-    this.autoBtn.classList.toggle('on', p.auto)
-    this.autoBtn.innerHTML = p.auto
-      ? 'Auto: On<small>seeking beasts…</small>'
-      : 'Auto: Off<small>seek &amp; slay nearby beasts</small>'
+    this.game.dispatch({ type: 'toggle-auto' })
     this.log(p.auto ? 'Auto-battle engaged' : 'Auto-battle disengaged', '#9ad0ff')
+    this.syncAuto()
+  }
+
+  /**
+   * The button reads the simulation rather than remembering what it was last
+   * told. Travel switches auto-battle on, and taking the stick switches it off
+   * again, so the label has more than one author.
+   */
+  private syncAuto() {
+    const g = this.game
+    const on = g.player.auto
+    const sub = g.travel
+      ? `on the road to ${g.travel.label}`
+      : on
+        ? 'seeking beasts…'
+        : 'seek &amp; slay nearby beasts'
+    const html = `Auto: ${on ? 'On' : 'Off'}<small>${sub}</small>`
+    if (this.autoBtn.innerHTML !== html) this.autoBtn.innerHTML = html
+    this.autoBtn.classList.toggle('on', on)
   }
 
   private toggleAutoEquip() {
@@ -431,8 +624,27 @@ export class UI {
     setTimeout(() => line.remove(), 5900)
   }
 
+  /**
+   * Banners queue rather than overwrite. Walking into a camp can finish a task
+   * in the same frame that finds the place, and the one the player most wants
+   * to read is the one that used to be thrown away.
+   */
   banner(title: string, sub: string) {
-    this.bannerBox.innerHTML = `<div class="banner-t">${title}</div><div class="banner-s">${sub}</div>`
+    this.banners.push({ title, sub })
+    // Three deep is enough for any one moment; past that the parade is longer
+    // than the event that caused it. The ones dropped are the last to arrive,
+    // because the first is what the player did and the rest are its change.
+    if (this.banners.length > 3) this.banners.length = 3
+    if (this.bannerTimer <= 0) this.showBanner()
+  }
+
+  private showBanner() {
+    const next = this.banners.shift()
+    if (!next) {
+      this.bannerBox.classList.remove('show')
+      return
+    }
+    this.bannerBox.innerHTML = `<div class="banner-t">${next.title}</div><div class="banner-s">${next.sub}</div>`
     this.bannerBox.classList.remove('show')
     void this.bannerBox.offsetWidth // restart the CSS animation
     this.bannerBox.classList.add('show')
@@ -453,10 +665,10 @@ export class UI {
     this.xpLabel.textContent = ''
     this.lvlLabel.textContent = `Lv ${p.level}`
     this.statLine.innerHTML =
-      `<span>DMG <b>${Math.round(s.damage)}</b></span>` +
-      `<span>ARM <b>${s.armor}</b></span>` +
-      `<span>CRIT <b>${Math.round(s.crit * 100)}%</b></span>` +
-      `<span>SPD <b>${(1 / s.attackInterval).toFixed(2)}/s</b></span>`
+      `<span>Damage <b>${Math.round(s.damage)}</b></span>` +
+      `<span>Armor <b>${s.armor}</b></span>` +
+      `<span>Critical Chance <b>${Math.round(s.crit * 100)}%</b></span>` +
+      `<span>Attack Speed <b>${(1 / s.attackInterval).toFixed(2)}</b></span>`
     this.goldLabel.textContent = `${p.gold.toLocaleString()} gold`
 
     // A named place wins the headline and demotes its region to the subtitle:
@@ -466,6 +678,10 @@ export class UI {
     const here = camp?.name ?? g.currentLandmark?.name
     const label = here ? `${here}<small>${region.name}</small>` : region.name
     if (this.zoneLabel.innerHTML !== label) this.zoneLabel.innerHTML = label
+    const worldHeading = window.innerWidth > 860
+      ? `Wildmarch<small>${here ?? region.name}</small>`
+      : label
+    if (this.worldTitle.innerHTML !== worldHeading) this.worldTitle.innerHTML = worldHeading
 
     for (let i = 0; i < this.abilityEls.length; i++) {
       const ab = g.abilities[i]!
@@ -477,6 +693,16 @@ export class UI {
     }
 
     this.death.classList.toggle('show', !p.alive)
+
+    // Walking away ends a conversation, and so does dying in the middle of one.
+    const npc = p.alive ? g.nearbyNpc : null
+    if (this.dialogNpc && this.dialogNpc !== npc) this.closeDialog()
+    const prompt = npc && !this.dialogNpc ? `Speak to ${npc.name}` : ''
+    if (prompt) {
+      const html = `${prompt} <span style="opacity:.5">G</span>`
+      if (this.talkPrompt.innerHTML !== html) this.talkPrompt.innerHTML = html
+    }
+    this.talkPrompt.classList.toggle('show', !!prompt)
 
     const claim = g.claimableCount
     this.setBadge('rewards', claim)
@@ -494,10 +720,11 @@ export class UI {
 
     this.drawMinimap()
     this.updateTracker()
+    this.syncAuto()
 
     if (this.bannerTimer > 0) {
       this.bannerTimer -= dt
-      if (this.bannerTimer <= 0) this.bannerBox.classList.remove('show')
+      if (this.bannerTimer <= 0) this.showBanner()
     }
 
     if (this.open && this.needsPanel) this.renderPanel()
@@ -530,20 +757,42 @@ export class UI {
 
   private updateTracker() {
     const g = this.game
+    const travel = g.travel
+    let html: string
+    // A task nobody has handed over yet points at the person holding it, not at
+    // an objective — otherwise the tracker asks for wolves the kills of which
+    // count for nothing.
+    const offer = g.offeredQuest
     const q = g.quest
-    if (!q) {
-      this.tracker.innerHTML = `<h4>Task</h4><div class="q-name">All tasks complete</div>
+    if (offer) {
+      const who = npcById(offer.from!)
+      html = `<h4>Current Task</h4>
+        <div class="q-name">Speak to ${who?.name ?? 'the warden'}</div>
+        <div class="q-desc">There is work waiting at ${who?.title ?? 'the camp'}.</div>
+        <div class="q-obj">Stand beside them and press G</div>`
+    } else if (!q) {
+      html = `<h4>Task</h4><div class="q-name">All tasks complete</div>
         <div class="q-desc">The Wildmarch is yours. Keep hunting for rewards.</div>`
-      return
+    } else {
+      const goal = g.questGoal
+      const have = Math.min(g.questProgress, goal)
+      const objective = objectiveText(q.objective, have, goal)
+      html = `<h4>Current Task</h4>
+        <div class="q-name">${q.name}</div>
+        <div class="q-desc">${q.desc}</div>
+        <div class="q-obj${have >= goal ? ' done' : ''}">${objective}</div>
+        <div class="q-bar"><i style="width:${(have / goal) * 100}%"></i></div>`
     }
-    const goal = g.questGoal
-    const have = Math.min(g.questProgress, goal)
-    const objective = objectiveText(q.objective, have, goal)
-    this.tracker.innerHTML = `<h4>Current Task</h4>
-      <div class="q-name">${q.name}</div>
-      <div class="q-desc">${q.desc}</div>
-      <div class="q-obj${have >= goal ? ' done' : ''}">${objective}</div>
-      <div class="q-bar"><i style="width:${(have / goal) * 100}%"></i></div>`
+    if (travel) html += `<div class="q-travel">On the road to ${travel.label}</div>`
+    if (this.tracker.innerHTML !== html) this.tracker.innerHTML = html
+
+    // The button offers the walk, and takes it back while one is under way.
+    const task = offer ?? q
+    const canGo = !!travel || (!!task && !!g.questDestination(task))
+    this.trackerGo.classList.toggle('hide', !canGo)
+    const label = travel ? 'Stop travelling' : 'Travel there'
+    if (this.trackerGo.textContent !== label) this.trackerGo.textContent = label
+    this.trackerGo.classList.toggle('on', !!travel)
   }
 
   private drawMinimap() {
@@ -553,7 +802,7 @@ export class UI {
     const k = size / WORLD_SIZE
     ctx.clearRect(0, 0, size, size)
     ctx.imageSmoothingEnabled = false
-    ctx.drawImage(g.world.minimap, 0, 0, MAP_TILES, MAP_TILES, 0, 0, size, size)
+    ctx.drawImage(this.minimapBase, 0, 0, MAP_TILES, MAP_TILES, 0, 0, size, size)
 
     // Visible slice of the world.
     ctx.strokeStyle = 'rgba(255,255,255,0.35)'
@@ -565,7 +814,7 @@ export class UI {
       Math.round(this.renderer.vh * k),
     )
 
-    for (const e of g.enemies) {
+    for (const e of g.spatial.queryRadius(g.player.x, g.player.y, 1500)) {
       if (!e.alive) continue
       const d = Math.hypot(e.x - g.player.x, e.y - g.player.y)
       if (d > 1500) continue
@@ -604,6 +853,29 @@ export class UI {
 
     const px = Math.round(g.player.x * k)
     const py = Math.round(g.player.y * k)
+
+    // Where the walk is going, and the line it is walking. A destination the
+    // map does not show is a destination the player has to take on trust.
+    const t = g.travel
+    if (t) {
+      const tx = Math.round(t.x * k)
+      const ty = Math.round(t.y * k)
+      ctx.strokeStyle = 'rgba(154,208,255,0.5)'
+      ctx.lineWidth = 1
+      ctx.setLineDash([3, 3])
+      ctx.beginPath()
+      ctx.moveTo(px + 0.5, py + 0.5)
+      ctx.lineTo(tx + 0.5, ty + 0.5)
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = '#0a0b11'
+      ctx.fillRect(tx - 4, ty - 1, 9, 3)
+      ctx.fillRect(tx - 1, ty - 4, 3, 9)
+      ctx.fillStyle = '#9ad0ff'
+      ctx.fillRect(tx - 4, ty, 9, 1)
+      ctx.fillRect(tx, ty - 4, 1, 9)
+    }
+
     ctx.fillStyle = '#0a0b11'
     ctx.fillRect(px - 3, py - 3, 6, 6)
     ctx.fillStyle = '#eaf1ff'
@@ -664,7 +936,7 @@ export class UI {
         node.classList.toggle('passed', !!taken && taken !== choice.id)
         node.disabled = !unlocked || !!taken
         node.addEventListener('click', () => {
-          if (g.chooseTalent(choice.id)) this.renderPanel()
+          if (g.dispatch({ type: 'choose-talent', talentId: choice.id }).ok) this.renderPanel()
         })
         grid.appendChild(node)
       }
@@ -679,7 +951,7 @@ export class UI {
       btn.textContent = `Retrain — ${cost.toLocaleString()}g`
       btn.disabled = g.player.gold < cost
       btn.addEventListener('click', () => {
-        g.respec()
+        g.dispatch({ type: 'respec' })
         this.renderPanel()
       })
       foot.appendChild(btn)
@@ -915,7 +1187,7 @@ export class UI {
       const cell = el('div', 'equip-cell')
       const item = g.equipped[slot]
       const node = this.itemSlot(item, () => {
-        g.unequip(slot)
+        g.dispatch({ type: 'unequip', slot })
         this.needsPanel = true
       })
       if (!item) node.appendChild(el('span', 'ph', SLOT_LABEL[slot].slice(0, 5)))
@@ -955,13 +1227,13 @@ export class UI {
     const bagGrid = el('div', 'bag-grid')
     g.bag.forEach((item, i) => {
       const node = this.itemSlot(item, () => {
-        g.equipFromBag(i)
+        g.dispatch({ type: 'equip', bagIndex: i })
         this.needsPanel = true
       })
       if (item) {
         node.addEventListener('contextmenu', (e) => {
           e.preventDefault()
-          g.sellFromBag(i)
+          g.dispatch({ type: 'sell', bagIndex: i })
           this.hideTip()
           this.needsPanel = true
         })
@@ -1002,19 +1274,46 @@ export class UI {
     QUESTS.forEach((q, i) => {
       const done = i < g.questIndex
       const active = i === g.questIndex
+      const offered = active && !!g.offeredQuest
       const card = el('div', `card${done ? ' done' : active ? '' : ' locked'}`)
       const main = el('div', 'cmain')
       const goal = q.objective.type === 'kill' ? q.objective.count : 1
-      const have = done ? goal : active ? Math.min(g.questProgress, goal) : 0
+      const have = done ? goal : active && !offered ? Math.min(g.questProgress, goal) : 0
       const objective = objectiveText(q.objective, have, goal)
+      const giver = q.from ? `<div class="cdesc">Given by ${q.giver}</div>` : ''
       main.innerHTML = `<div class="ctitle">${q.name}</div>
         <div class="cdesc">${q.desc}</div>
+        ${giver}
         <div class="cdesc" style="margin-top:3px">${objective}</div>
         <div class="crew">${rewardText(q.reward)}</div>`
       card.appendChild(main)
-      card.appendChild(
-        el('div', 'cprog', done ? '<span class="tick">✔</span>' : active ? 'Active' : 'Locked'),
+      const side = el('div', 'cprog')
+      side.appendChild(
+        el(
+          'div',
+          undefined,
+          done ? '<span class="tick">✔</span>' : offered ? 'Offered' : active ? 'Active' : 'Locked',
+        ),
       )
+      // Only the task in hand can be walked to. A locked one has no place yet,
+      // and a finished one has no work left at the place it had.
+      const dest = active ? g.questDestination(q) : null
+      if (dest) {
+        const going = g.travel?.questId === q.id
+        const go = el('button', `btn c-go${going ? ' on' : ''}`)
+        go.textContent = going ? 'Stop' : 'Travel'
+        go.addEventListener('click', () => {
+          if (going) {
+            g.cancelTravel('Travel stopped.')
+            this.needsPanel = true
+            return
+          }
+          // Close the panel: the walk is the thing to watch, and it starts now.
+          if (g.travelTo(dest)) this.hide()
+        })
+        side.appendChild(go)
+      }
+      card.appendChild(side)
       body.appendChild(card)
     })
   }
@@ -1041,7 +1340,7 @@ export class UI {
         const btn = el('button', 'btn on')
         btn.textContent = 'Claim'
         btn.addEventListener('click', () => {
-          g.claimMilestone(m.id)
+          g.dispatch({ type: 'claim-milestone', milestoneId: m.id })
           this.renderPanel()
         })
         card.appendChild(btn)

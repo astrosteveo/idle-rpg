@@ -223,7 +223,7 @@ export class PixelCanvas {
     const w = this.w
     const h = this.h
     const solid = new Uint8Array(w * h)
-    for (let i = 0; i < w * h; i++) solid[i] = d[i * 4 + 3] > 8 ? 1 : 0
+    for (let i = 0; i < w * h; i++) solid[i] = d[i * 4 + 3]! > 8 ? 1 : 0
     const r = parseInt(color.slice(1, 3), 16)
     const g = parseInt(color.slice(3, 5), 16)
     const b = parseInt(color.slice(5, 7), 16)
@@ -257,9 +257,9 @@ export class PixelCanvas {
     const tb = parseInt(color.slice(5, 7), 16)
     for (let i = 0; i < d.length; i += 4) {
       if (d[i + 3] === 0) continue
-      d[i] += (tr - d[i]) * amount
-      d[i + 1] += (tg - d[i + 1]) * amount
-      d[i + 2] += (tb - d[i + 2]) * amount
+      d[i] = d[i]! + (tr - d[i]!) * amount
+      d[i + 1] = d[i + 1]! + (tg - d[i + 1]!) * amount
+      d[i + 2] = d[i + 2]! + (tb - d[i + 2]!) * amount
     }
     this.ctx.putImageData(img, 0, 0)
     return this
@@ -272,13 +272,21 @@ export class PixelCanvas {
 
 /** A sprite sheet laid out as rows = facing, cols = animation frame. */
 export interface Sheet {
-  cv: HTMLCanvasElement
+  cv: CanvasImageSource
   fw: number
   fh: number
   cols: number
   rows: number
   /** Distance from the top of a frame to the character's ground contact point. */
   anchorY: number
+  /**
+   * True when all 8 rows were drawn at their own angle.
+   *
+   * A sheet without this holds one side view repeated, so the caller must pick
+   * its row from the heading rather than from the facing octant. See
+   * `Renderer.drawEnemy`.
+   */
+  directional: boolean
 }
 
 /**
@@ -308,7 +316,7 @@ export function buildSheet(
       sctx.drawImage(cell.cv, c * fw, r * fh)
     }
   }
-  return { cv: sheet, fw, fh, cols, rows, anchorY }
+  return { cv: sheet, fw, fh, cols, rows, anchorY, directional: true }
 }
 
 /** Mixes two hex colours; t=0 returns a, t=1 returns b. */

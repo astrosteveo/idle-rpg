@@ -8,6 +8,7 @@
  * a fight feels like somewhere you chose to go.
  */
 import { clamp, dist, dist2, distToSegment2, fbm, hash2, rng, type Rng } from '../core/math'
+import type { NpcSpriteId } from '../assets/types'
 import type { EnemyKind } from './types'
 
 export const TILE = 32
@@ -236,6 +237,56 @@ export const CAMPS: Camp[] = [
 ]
 
 /**
+ * A person who stands in one place and hands out work.
+ *
+ * Placement data, exactly like `Camp` and `Landmark`. Which lines a character
+ * has heard is not stored at all — the dialogue a person offers is a function
+ * of the quest chain, so the state that decides it is already in the save.
+ */
+export interface Npc {
+  id: string
+  name: string
+  /** Shown under the name in the dialogue box. */
+  title: string
+  x: number
+  y: number
+  /** How close the player stands before the prompt to speak appears. */
+  radius: number
+  /** Which art this person wears. */
+  sprite: NpcSpriteId
+  /** One line to a page, said before the task is offered. */
+  intro: string[]
+  /** Said while the task they gave is still running. */
+  waiting: string
+  /** Said once their task is behind you. */
+  done: string
+}
+
+export const NPCS: Npc[] = [
+  {
+    id: 'aldric',
+    name: 'Warden Aldric',
+    title: 'Hearthglen Camp',
+    // North-west of the fire, on the ground a new character walks in across.
+    x: 2344,
+    y: 3704,
+    radius: 58,
+    sprite: 'warden',
+    intro: [
+      'Hearthglen still stands. That is the most I will claim for it.',
+      'Wolves come off the Vale bolder every night. The stock is thin and we burn the fires late.',
+      'Thin the pack and the rest will keep their distance. Six would be a start.',
+    ],
+    waiting: 'Six wolves. Come back to the fire when the grass is red.',
+    done: 'The Vale is quieter for what you did. Keep it that way.',
+  },
+]
+
+export function npcById(id: string): Npc | null {
+  return NPCS.find((n) => n.id === id) ?? null
+}
+
+/**
  * Seven named places, one to a region plus a crossroads in the open. They are
  * deliberately not quest targets or reward sites — a landmark earns its keep by
  * being somewhere you can name, which is what turns "the north-west bit" into
@@ -346,7 +397,6 @@ export class World {
   readonly nodes: SpawnNode[] = []
   /** props bucketed by 512px cell for cheap view queries */
   readonly propGrid = new Map<string, PropInstance[]>()
-  readonly minimap: HTMLCanvasElement
 
   private tileCache = new Map<number, Tile>()
 
@@ -354,7 +404,6 @@ export class World {
     this.seed = seed
     this.generateProps()
     this.generateNodes()
-    this.minimap = this.bakeMinimap()
   }
 
   /* ---------------- terrain ---------------- */
@@ -382,6 +431,14 @@ export class World {
   campAt(wx: number, wy: number): Camp | null {
     for (const c of CAMPS) {
       if (dist2(wx, wy, c.x, c.y) < c.radius * c.radius) return c
+    }
+    return null
+  }
+
+  /** The person close enough to speak to, or null. */
+  npcAt(wx: number, wy: number): Npc | null {
+    for (const n of NPCS) {
+      if (dist2(wx, wy, n.x, n.y) < n.radius * n.radius) return n
     }
     return null
   }
@@ -496,6 +553,198 @@ export class World {
 
   isSolid(wx: number, wy: number): boolean {
     return isSolidTile(this.tileAt(Math.floor(wx / TILE), Math.floor(wy / TILE)))
+  }
+
+  /* ---------------- travel ---------------- */
+
+  /**
+   * A route from one world point to another, as a short list of world points.
+   *
+   * A straight walk is not enough: the mover slides along whichever axis is
+   * free, so a bay in a lake holds it against the shore for as long as it
+   * pushes. This searches the 32 px tile grid instead. The map is 148 tiles
+   * square, so the worst search is a few thousand tiles, and it runs once for
+   * each journey rather than once for each frame.
+   *
+   * The first attempt keeps one tile of clearance from water, because the
+   * mover collides with a padded box and a route that shaves a shoreline
+   * catches on it. A land bridge one tile wide has no such route, thus a
+   * failed search tries again on the bare walkable grid.
+   */
+  findPath(x0: number, y0: number, x1: number, y1: number): { x: number; y: number }[] | null {
+    const sx = Math.floor(x0 / TILE)
+    const sy = Math.floor(y0 / TILE)
+    const gx = Math.floor(x1 / TILE)
+    const gy = Math.floor(y1 / TILE)
+    for (const margin of [true, false]) {
+      const start = this.nearestWalkable(sx, sy, margin)
+      const goal = this.nearestWalkable(gx, gy, margin)
+      if (!start || !goal) continue
+      const tiles = this.search(start, goal, margin)
+      if (tiles) return this.smooth(tiles, x1, y1)
+    }
+    return null
+  }
+
+  /** A tile the mover fits in, at or near the one asked for. */
+  private nearestWalkable(tx: number, ty: number, margin: boolean): [number, number] | null {
+    if (this.walkable(tx, ty, margin)) return [tx, ty]
+    for (let r = 1; r <= 5; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue
+          if (this.walkable(tx + dx, ty + dy, margin)) return [tx + dx, ty + dy]
+        }
+      }
+    }
+    return null
+  }
+
+  private walkable(tx: number, ty: number, margin: boolean): boolean {
+    if (tx < 1 || ty < 1 || tx >= MAP_TILES - 1 || ty >= MAP_TILES - 1) return false
+    if (isSolidTile(this.tileAt(tx, ty))) return false
+    if (!margin) return true
+    return (
+      !isSolidTile(this.tileAt(tx - 1, ty)) &&
+      !isSolidTile(this.tileAt(tx + 1, ty)) &&
+      !isSolidTile(this.tileAt(tx, ty - 1)) &&
+      !isSolidTile(this.tileAt(tx, ty + 1))
+    )
+  }
+
+  /** A* over the tile grid, eight ways, no cutting a blocked corner. */
+  private search(
+    start: [number, number],
+    goal: [number, number],
+    margin: boolean,
+  ): [number, number][] | null {
+    const N = MAP_TILES
+    const size = N * N
+    const startId = start[1] * N + start[0]
+    const goalId = goal[1] * N + goal[0]
+    if (startId === goalId) return [start]
+
+    const g = new Float32Array(size).fill(Infinity)
+    const f = new Float32Array(size).fill(Infinity)
+    const from = new Int32Array(size).fill(-1)
+    const closed = new Uint8Array(size)
+    const heap: number[] = []
+
+    const h = (id: number) => {
+      const dx = Math.abs((id % N) - goal[0])
+      const dy = Math.abs(Math.floor(id / N) - goal[1])
+      // Octile: the diagonal steps cost more, so the estimate stays admissible.
+      return Math.max(dx, dy) + 0.4142 * Math.min(dx, dy)
+    }
+    const swap = (a: number, b: number) => {
+      const t = heap[a]!
+      heap[a] = heap[b]!
+      heap[b] = t
+    }
+    const push = (id: number) => {
+      heap.push(id)
+      let i = heap.length - 1
+      while (i > 0) {
+        const p = (i - 1) >> 1
+        if (f[heap[p]!]! <= f[heap[i]!]!) break
+        swap(p, i)
+        i = p
+      }
+    }
+    const pop = (): number => {
+      const top = heap[0]!
+      const last = heap.pop()!
+      if (heap.length) {
+        heap[0] = last
+        let i = 0
+        for (;;) {
+          const l = i * 2 + 1
+          const r = l + 1
+          let m = i
+          if (l < heap.length && f[heap[l]!]! < f[heap[m]!]!) m = l
+          if (r < heap.length && f[heap[r]!]! < f[heap[m]!]!) m = r
+          if (m === i) break
+          swap(m, i)
+          i = m
+        }
+      }
+      return top
+    }
+
+    g[startId] = 0
+    f[startId] = h(startId)
+    push(startId)
+
+    while (heap.length) {
+      const cur = pop()
+      if (cur === goalId) break
+      if (closed[cur]) continue
+      closed[cur] = 1
+      const cx = cur % N
+      const cy = Math.floor(cur / N)
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue
+          const nx = cx + dx
+          const ny = cy + dy
+          if (!this.walkable(nx, ny, margin)) continue
+          // A diagonal that squeezes between two blocked tiles is a route the
+          // collision box cannot take.
+          if (dx && dy) {
+            if (!this.walkable(cx + dx, cy, margin)) continue
+            if (!this.walkable(cx, cy + dy, margin)) continue
+          }
+          const id = ny * N + nx
+          if (closed[id]) continue
+          const step = dx && dy ? 1.4142 : 1
+          const cost = g[cur]! + step
+          if (cost >= g[id]!) continue
+          g[id] = cost
+          f[id] = cost + h(id)
+          from[id] = cur
+          push(id)
+        }
+      }
+    }
+
+    if (from[goalId] === -1) return null
+    const out: [number, number][] = []
+    for (let id = goalId; id !== -1; id = from[id]!) {
+      out.push([id % N, Math.floor(id / N)])
+      if (id === startId) break
+    }
+    out.reverse()
+    return out
+  }
+
+  /**
+   * Drop every waypoint the mover can see past. Without this the walk follows
+   * the grid, and a route across open ground reads as a staircase.
+   */
+  private smooth(tiles: [number, number][], gx: number, gy: number): { x: number; y: number }[] {
+    const pts = tiles.map(([tx, ty]) => ({ x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2 }))
+    pts[pts.length - 1] = { x: gx, y: gy }
+    // One tile means the goal is the only waypoint; the loop below needs two.
+    if (pts.length < 2) return [{ x: gx, y: gy }]
+    const out: { x: number; y: number }[] = []
+    let i = 0
+    while (i < pts.length - 1) {
+      let j = pts.length - 1
+      while (j > i + 1 && !this.clearLine(pts[i]!, pts[j]!)) j--
+      out.push(pts[j]!)
+      i = j
+    }
+    return out
+  }
+
+  /** True when nothing solid stands between two points. */
+  private clearLine(a: { x: number; y: number }, b: { x: number; y: number }): boolean {
+    const steps = Math.ceil(dist(a.x, a.y, b.x, b.y) / 8)
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps
+      if (this.isSolid(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)) return false
+    }
+    return true
   }
 
   /* ---------------- props ---------------- */
@@ -827,41 +1076,4 @@ export class World {
     return { x: n.x, y: n.y }
   }
 
-  /* ---------------- minimap ---------------- */
-
-  private bakeMinimap(): HTMLCanvasElement {
-    const size = MAP_TILES
-    const cv = document.createElement('canvas')
-    cv.width = size
-    cv.height = size
-    const ctx = cv.getContext('2d')!
-    const img = ctx.createImageData(size, size)
-    const colors: Record<number, [number, number, number]> = {
-      [T.Water]: [38, 62, 96],
-      [T.Shallow]: [56, 92, 124],
-      [T.Sand]: [154, 140, 100],
-      [T.Grass]: [66, 96, 56],
-      [T.GrassLush]: [58, 88, 50],
-      [T.Meadow]: [92, 118, 60],
-      [T.Forest]: [34, 60, 38],
-      [T.Dirt]: [92, 74, 52],
-      [T.Road]: [116, 96, 68],
-      [T.Gravel]: [96, 94, 86],
-      [T.Rock]: [110, 108, 100],
-      [T.Snow]: [196, 204, 212],
-    }
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        const c = colors[this.tileAt(x, y)] ?? [60, 80, 50]
-        const shade = 0.86 + hash2(x, y, 7) * 0.28
-        const o = (y * size + x) * 4
-        img.data[o] = clamp(c[0] * shade, 0, 255)
-        img.data[o + 1] = clamp(c[1] * shade, 0, 255)
-        img.data[o + 2] = clamp(c[2] * shade, 0, 255)
-        img.data[o + 3] = 255
-      }
-    }
-    ctx.putImageData(img, 0, 0)
-    return cv
-  }
 }

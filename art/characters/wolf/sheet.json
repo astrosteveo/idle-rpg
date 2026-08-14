@@ -1,0 +1,15 @@
+{
+  "out": "public/assets/generated/wolf-atlas-8dir.png",
+  "standingHeight": 40,
+  "columns": 6,
+  "strips": {
+    "S":  "art/characters/wolf/S.png",
+    "W":  "art/characters/wolf/W.png",
+    "E":  "art/characters/wolf/E.png",
+    "N":  "art/characters/wolf/N.png",
+    "SE": "art/characters/wolf/SE.png",
+    "SW": "art/characters/wolf/SW.png",
+    "NE": "art/characters/wolf/NE.png",
+    "NW": "art/characters/wolf/NW.png"
+  }
+}

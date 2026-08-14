@@ -4,7 +4,7 @@
  * be changed without touching simulation code.
  */
 import { ENEMY_KINDS, perSpecies, type BySpecies, type EnemyKind, type ItemStats, type Slot } from './types'
-import type { BeastSheetId, IconKind } from '../render/sprites'
+import type { BeastSheetId, IconKind } from '../assets/types'
 
 /* ------------------------------------------------------------------ *
  * Modifiers
@@ -508,6 +508,32 @@ export const ELITE = {
 }
 
 /* ------------------------------------------------------------------ *
+ * Auto-battle
+ * ------------------------------------------------------------------ */
+
+/**
+ * How far auto-battle will walk for a fight.
+ *
+ * The gap between the two seek ranges is what keeps a hunt on its task. A
+ * character that answers every beast inside 1000 px drifts off the den it was
+ * sent to, one detour at a time, and the task it is holding never finishes.
+ * With a task running it goes the full distance only for what the task wants,
+ * and kills anything else that comes close enough to be in the way.
+ */
+export const AUTO = {
+  /** Range it will cross for a beast, with no task asking for one. */
+  seek: 1000,
+  /** Range it will cross for a beast the task wants. */
+  taskSeek: 1000,
+  /** Range it will cross for anything else while a task wants a species. */
+  straySeek: 340,
+  /** Beyond this the current target is dropped, whatever it is. */
+  drop: 1150,
+  /** How close to a roaming destination counts as being there. */
+  arrive: 90,
+}
+
+/* ------------------------------------------------------------------ *
  * World bosses
  * ------------------------------------------------------------------ */
 
@@ -812,13 +838,21 @@ export interface QuestDef {
   desc: string
   objective: QuestObjective
   reward: QuestReward
+  /**
+   * Id in `NPCS` of the person who hands this task out. With one, the task sits
+   * unstarted until the player walks up and takes it, and nothing done before
+   * that counts toward it. Without one the task starts by itself the moment the
+   * task before it ends, which is how the whole chain used to work.
+   */
+  from?: string
 }
 
 export const QUESTS: QuestDef[] = [
   {
     id: 'q1',
     name: 'Blood on the Grass',
-    giver: 'Hearthglen Camp',
+    giver: 'Warden Aldric',
+    from: 'aldric',
     desc: 'Wolves have grown bold at the edge of the Vale. Thin them out.',
     objective: { type: 'kill', kind: 'wolf', count: 6 },
     reward: { xp: 70, gold: 45, item: { base: 'axe', rarity: 1, ilvl: 3 } },
