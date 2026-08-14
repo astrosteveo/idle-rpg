@@ -1,0 +1,705 @@
+<title>Wildmarch Server Design</title>
+<style>
+  /* ---- Light palette: the complete token set lives here ---- */
+  :root {
+    --ground:   #F4F4F1;
+    --surface:  #FCFCFA;
+    --sunken:   #EBEBE6;
+    --ink:      #1B1E22;
+    --ink-soft: #4A4F57;
+    --ink-mute: #767C85;
+    --rule:     #D9D8D1;
+    --rule-firm:#BEBCB3;
+    --brass:    #8A6216;
+    --brass-lo: #F0E6CE;
+    --steel:    #35566E;
+    --steel-lo: #DFE8EE;
+    --warn:     #8A3A2B;
+    --warn-lo:  #F5E2DD;
+    --shadow:   0 1px 2px rgba(27,30,34,.06), 0 8px 24px -16px rgba(27,30,34,.28);
+
+    --display: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif;
+    --body:    'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+    --util:    ui-sans-serif, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --mono:    ui-monospace, 'SF Mono', SFMono-Regular, 'Cascadia Code', Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:   #131519;
+      --surface:  #1A1D22;
+      --sunken:   #0E1014;
+      --ink:      #E5E4DF;
+      --ink-soft: #B0B3B8;
+      --ink-mute: #7E838B;
+      --rule:     #2A2E35;
+      --rule-firm:#3D434B;
+      --brass:    #D5A445;
+      --brass-lo: #2E2716;
+      --steel:    #86AECB;
+      --steel-lo: #17222B;
+      --warn:     #DE8878;
+      --warn-lo:  #2C1C18;
+      --shadow:   0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.7);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:   #131519;
+    --surface:  #1A1D22;
+    --sunken:   #0E1014;
+    --ink:      #E5E4DF;
+    --ink-soft: #B0B3B8;
+    --ink-mute: #7E838B;
+    --rule:     #2A2E35;
+    --rule-firm:#3D434B;
+    --brass:    #D5A445;
+    --brass-lo: #2E2716;
+    --steel:    #86AECB;
+    --steel-lo: #17222B;
+    --warn:     #DE8878;
+    --warn-lo:  #2C1C18;
+    --shadow:   0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.7);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.62;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 50rem;
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 3.25rem;
+  }
+
+  /* ---- Masthead ---- */
+  .masthead { display: flex; flex-direction: column; gap: 1rem; }
+
+  .eyebrow {
+    font-family: var(--util);
+    font-size: .7rem;
+    font-weight: 600;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--brass);
+    margin: 0;
+  }
+
+  h1 {
+    font-family: var(--display);
+    font-size: clamp(2.1rem, 6vw, 3.1rem);
+    font-weight: 600;
+    line-height: 1.1;
+    letter-spacing: -.015em;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  .dek {
+    font-size: 1.16rem;
+    color: var(--ink-soft);
+    max-width: 40ch;
+    margin: 0;
+    text-wrap: pretty;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem 1.5rem;
+    font-family: var(--util);
+    font-size: .78rem;
+    color: var(--ink-mute);
+    border-top: 1px solid var(--rule);
+    padding-top: .9rem;
+    margin-top: .5rem;
+  }
+  .meta b { color: var(--ink-soft); font-weight: 600; }
+
+  /* ---- Sections ---- */
+  section { display: flex; flex-direction: column; gap: 1.15rem; }
+
+  h2 {
+    font-family: var(--display);
+    font-size: 1.6rem;
+    font-weight: 600;
+    letter-spacing: -.01em;
+    line-height: 1.25;
+    text-wrap: balance;
+    margin: 0;
+    padding-bottom: .6rem;
+    border-bottom: 2px solid var(--rule-firm);
+  }
+
+  h3 {
+    font-family: var(--util);
+    font-size: .82rem;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--ink);
+    margin: .5rem 0 0;
+  }
+
+  p { margin: 0; text-wrap: pretty; }
+
+  ul { margin: 0; padding-left: 1.15rem; display: flex; flex-direction: column; gap: .6rem; }
+  li::marker { color: var(--brass); }
+
+  a { color: var(--steel); text-underline-offset: .16em; }
+  a:focus-visible, .phase:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; }
+
+  code {
+    font-family: var(--mono);
+    font-size: .84em;
+    background: var(--sunken);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: .06em .32em;
+    word-break: break-word;
+  }
+
+  pre {
+    font-family: var(--mono);
+    font-size: .78rem;
+    line-height: 1.62;
+    background: var(--sunken);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--rule-firm);
+    padding: 1.1rem 1.25rem;
+    margin: 0;
+    overflow-x: auto;
+    color: var(--ink-soft);
+  }
+  pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+  pre .k { color: var(--brass); }
+  pre .c { color: var(--ink-mute); font-style: italic; }
+
+  /* ---- Tables ---- */
+  .scroll { overflow-x: auto; border: 1px solid var(--rule); background: var(--surface); }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-family: var(--util);
+    font-size: .84rem;
+    line-height: 1.5;
+  }
+  th, td { text-align: left; padding: .7rem .9rem; vertical-align: top; border-bottom: 1px solid var(--rule); }
+  th {
+    font-size: .68rem;
+    font-weight: 700;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+    background: var(--sunken);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td code { white-space: nowrap; }
+  .verb {
+    font-family: var(--mono);
+    font-size: .72rem;
+    font-weight: 700;
+    letter-spacing: .04em;
+    color: var(--brass);
+  }
+
+  /* ---- Callout ---- */
+  .callout {
+    background: var(--warn-lo);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--warn);
+    padding: 1.1rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: .7rem;
+  }
+  .callout .label {
+    font-family: var(--util);
+    font-size: .68rem;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--warn);
+  }
+  .callout p { font-size: .95rem; }
+
+  /* ---- Trust tiers ---- */
+  .tiers { display: flex; flex-direction: column; gap: 1rem; }
+  .tier {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    box-shadow: var(--shadow);
+    padding: 1.15rem 1.3rem;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: .35rem 1rem;
+    align-items: baseline;
+  }
+  .tier .n {
+    font-family: var(--mono);
+    font-size: .72rem;
+    font-weight: 700;
+    letter-spacing: .06em;
+    color: var(--surface);
+    background: var(--brass);
+    padding: .18rem .45rem;
+    align-self: start;
+  }
+  .tier.t2 .n { background: var(--steel); }
+  .tier.t3 .n { background: var(--ink-mute); }
+  .tier h3 { margin: 0; font-size: .95rem; text-transform: none; letter-spacing: 0; font-family: var(--display); font-weight: 600; }
+  .tier .body { grid-column: 2; display: flex; flex-direction: column; gap: .6rem; font-size: .95rem; }
+  .tier .verdict {
+    grid-column: 2;
+    font-family: var(--util);
+    font-size: .72rem;
+    letter-spacing: .04em;
+    color: var(--ink-mute);
+    border-top: 1px solid var(--rule);
+    padding-top: .55rem;
+    margin-top: .2rem;
+  }
+
+  /* ---- Measured result ---- */
+  .figures {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+  }
+  .figure { background: var(--surface); padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: .2rem; }
+  .figure .v {
+    font-family: var(--display);
+    font-size: 1.85rem;
+    font-weight: 600;
+    line-height: 1;
+    color: var(--brass);
+    font-variant-numeric: tabular-nums;
+  }
+  .figure .l {
+    font-family: var(--util);
+    font-size: .72rem;
+    line-height: 1.35;
+    color: var(--ink-mute);
+  }
+
+  /* ---- Phase spine: numbering encodes a real build order ---- */
+  .phases { display: flex; flex-direction: column; }
+  .phase {
+    display: grid;
+    grid-template-columns: 2.6rem 1fr;
+    gap: 0 1.1rem;
+    padding-bottom: 1.9rem;
+    position: relative;
+  }
+  .phase::before {
+    content: "";
+    position: absolute;
+    left: 1.29rem;
+    top: 2.2rem;
+    bottom: 0;
+    width: 2px;
+    background: var(--rule);
+  }
+  .phase:last-child { padding-bottom: 0; }
+  .phase:last-child::before { display: none; }
+  .phase .num {
+    font-family: var(--mono);
+    font-size: .85rem;
+    font-weight: 700;
+    width: 2.6rem;
+    height: 2.6rem;
+    display: grid;
+    place-items: center;
+    border: 2px solid var(--brass);
+    border-radius: 50%;
+    color: var(--brass);
+    background: var(--ground);
+    position: relative;
+    z-index: 1;
+  }
+  .phase .content { display: flex; flex-direction: column; gap: .55rem; padding-top: .3rem; }
+  .phase h3 { font-family: var(--display); font-size: 1.12rem; font-weight: 600; text-transform: none; letter-spacing: 0; margin: 0; }
+  .phase p { font-size: .95rem; }
+  .done {
+    font-family: var(--util);
+    font-size: .8rem;
+    color: var(--ink-soft);
+    background: var(--brass-lo);
+    border-left: 2px solid var(--brass);
+    padding: .5rem .8rem;
+  }
+  .done b { font-weight: 700; color: var(--ink); }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 1.2rem;
+    font-family: var(--util);
+    font-size: .78rem;
+    color: var(--ink-mute);
+    display: flex;
+    flex-direction: column;
+    gap: .3rem;
+  }
+
+  @media (max-width: 34rem) {
+    body { font-size: 16px; }
+    .page { padding: 2.5rem 1.1rem 4rem; gap: 2.5rem; }
+    .tier { grid-template-columns: 1fr; }
+    .tier .body, .tier .verdict { grid-column: 1; }
+    .phase { grid-template-columns: 2rem 1fr; gap: 0 .8rem; }
+    .phase .num { width: 2rem; height: 2rem; font-size: .75rem; }
+    .phase::before { left: .97rem; top: 1.7rem; }
+  }
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <p class="eyebrow">Wildmarch &middot; Technical plan</p>
+    <h1>Server Backend Design</h1>
+    <p class="dek">How an entirely client-side idle RPG grows a server without rewriting the
+      simulation it already has.</p>
+    <div class="meta">
+      <span><b>Repo</b> astrosteveo/idle-rpg</span>
+      <span><b>Branch</b> worktree-server-backend-design</span>
+      <span><b>Status</b> Design, with one claim proven in code</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>What the backend is for</h2>
+    <p>Today the simulation runs in the browser, the save lives in <code>localStorage</code>, and
+      nothing leaves the machine. Three goals justify changing that, in the order they pay off.</p>
+    <ul>
+      <li><b>Your character follows you.</b> Play on a phone at lunch and a desktop at night, same
+        character. This is the reason most players will notice a server exists.</li>
+      <li><b>Time accrues honestly.</b> An idle game promises the world moves while you're away.
+        Right now that promise is kept by your own clock, which you can set to whatever you like.</li>
+      <li><b>The world is shared.</b> Apex beasts already walk on a schedule every client agrees on.
+        A server turns that schedule into a kill feed, ladders, and the ghosts of other players
+        hunting the same ground.</li>
+    </ul>
+    <h3>Non-goals for the first release</h3>
+    <ul>
+      <li><b>No real-time multiplayer.</b> No shared combat, no synchronized positions.</li>
+      <li><b>No trading.</b> Every verification property below assumes items are generated for one
+        character and never move. Trading turns a tolerable cheat into an economy-wide one.</li>
+      <li><b>No sign-up wall.</b> An idle game that asks for an email before you swing a sword loses
+        most of its players at the sign-up.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>What the client already gives you</h2>
+    <p>The client was built with this move in mind, and it shows. These seams come for free.</p>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Seam</th><th>Where</th><th>Why it matters</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>One file knows about storage</td><td><code>ui/storage.ts</code></td><td>Swapping <code>localStorage</code> for HTTP touches nothing in the simulation.</td></tr>
+          <tr><td>The save is a plain object</td><td><code>state.ts</code> &rarr; <code>serialize()</code></td><td>The wire format already exists. You don't have to invent one.</td></tr>
+          <tr><td>The decoder rejects what it doesn't recognize</td><td><code>save.ts</code> &rarr; <code>readSave()</code></td><td>Already a server-grade validator, field by field, with bounds. Lift it verbatim.</td></tr>
+          <tr><td>The clock is injected</td><td><code>SimulationDependencies</code></td><td>The server can hand the simulation its own time instead of the device's.</td></tr>
+          <tr><td>Randomness is injected</td><td><code>rngFactory</code></td><td>Any server-side roll is reproducible from a seed you store.</td></tr>
+          <tr><td>The offline ledger is pure</td><td><code>offline.ts</code> &rarr; <code>runOfflineLedger()</code></td><td>No DOM, no clock of its own. It runs on a server today, unmodified.</td></tr>
+          <tr><td>The world is a seed</td><td><code>world.ts</code> &rarr; <code>World</code></td><td>The server stores one integer, not a map.</td></tr>
+          <tr><td>Apex schedules are wall-clock</td><td><code>content.ts</code> &rarr; <code>bossWindow()</code></td><td>Every client already agrees when an apex walks. The server records who turned up, not when.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Why the live simulation stays on the client</h2>
+    <div class="callout">
+      <span class="label">The constraint everything else routes around</span>
+      <p>The moment-to-moment combat simulation is <b>not replayable</b>, and can't be made
+        authoritative without a rewrite.</p>
+    </div>
+    <ul>
+      <li><b>One RNG stream serves everything.</b> The same sequence feeds combat damage, loot rolls,
+        float-text offsets, corpse lean, and beast wander points. Cosmetic draws and consequential
+        draws advance the same stream, so any difference in what got drawn changes what drops.</li>
+      <li><b>Frame timing feeds the simulation.</b> The frame loop quantizes the real delta and passes
+        it to <code>update()</code>. A 60&nbsp;Hz client and a 144&nbsp;Hz client take different
+        numbers of steps, and so make different numbers of <code>rand()</code> calls.</li>
+      <li><b>The view rectangle reaches the simulation.</b> Anything that varies with window size
+        can't be reproduced from inputs alone.</li>
+    </ul>
+    <p>Fixing that means separating cosmetic randomness from consequential randomness, moving to a
+      fixed timestep, and removing the view from the simulation's inputs. That's a real project, and
+      it buys a property this game doesn't need. So the server is designed never to need it.</p>
+  </section>
+
+  <section>
+    <h2>The trust model: verify, don't simulate</h2>
+    <p>The server doesn't re-run combat. It checks that the save a client hands back could have come
+      from an honest game.</p>
+    <div class="tiers">
+
+      <article class="tier t1">
+        <span class="n">TIER 1</span>
+        <h3>Exact invariants</h3>
+        <div class="body">
+          <p>Closed-form facts about a legal save. Any violation is proof, not a signal.</p>
+          <ul>
+            <li><b>Items match their generator.</b> <code>makeItem()</code> is nearly deterministic
+              given base, item level, and rarity. Value and base damage are exact expressions.</li>
+            <li><b>Experience matches level.</b> <code>xpNext</code> must equal
+              <code>xpForLevel(level)</code>, and <code>xp</code> must be below it.</li>
+            <li><b>Talents match level.</b> One pick per unlocked row, never two from one row.</li>
+            <li><b>Milestones match counters.</b> A claimed milestone's threshold must actually be met.</li>
+            <li><b>Apex kills match the clock.</b> No stored boss window may exceed the server's
+              current one &mdash; a tight bound on the largest single reward in the game.</li>
+          </ul>
+        </div>
+        <p class="verdict">Ships as a hard rejection.</p>
+      </article>
+
+      <article class="tier t2">
+        <span class="n">TIER 2</span>
+        <h3>Rate ceilings</h3>
+        <div class="body">
+          <p><code>killsPerHour()</code> already computes how fast a build kills a species. Reuse it
+            as a cheat oracle: derive stats from the previously stored save, compute the best rate
+            that build could reach, multiply by elapsed wall-clock seconds, add headroom.</p>
+          <p>The ledger discounts by <code>OFFLINE.efficiency</code> (0.72) for healing, pathing, and
+            respawn waits. Live play beats that, so start headroom near 3&times; and tune it against
+            real data.</p>
+        </div>
+        <p class="verdict">Ships in shadow mode. Record, don't reject.</p>
+      </article>
+
+      <article class="tier t3">
+        <span class="n">TIER 3</span>
+        <h3>The clock</h3>
+        <div class="body">
+          <p>The server stamps <code>savedAt</code> itself and ignores the client's. That one change
+            makes the offline ledger honest, because the ledger is a pure function of elapsed time
+            and the client no longer gets a vote on elapsed time.</p>
+        </div>
+        <p class="verdict">One line of authority, most of the benefit.</p>
+      </article>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>The item check, measured</h2>
+    <p>Tier 1's item check is the load-bearing claim of this design, so it exists in code rather than
+      in prose. <code>game/verify.ts</code> reconstructs the loot generator's expressions, and
+      <code>tests/unit/verify.test.ts</code> runs it against thousands of generated items plus a set
+      of tampered ones.</p>
+    <div class="figures">
+      <div class="figure"><span class="v">3,600</span><span class="l">Generated items accepted, across every rarity and 60 item levels</span></div>
+      <div class="figure"><span class="v">0</span><span class="l">False rejections of honest gear</span></div>
+      <div class="figure"><span class="v">exact</span><span class="l">Damage, armour, and value lines &mdash; any edit is caught</span></div>
+      <div class="figure"><span class="v">2.3&times;</span><span class="l">Worst-case affix inflation before detection; 1.3&times; on average</span></div>
+    </div>
+    <p>Affix magnitudes are the only soft spot, because they're the one part the generator rolls
+      rather than derives. A cheater's entire remaining budget is a fraction of one affix line on one
+      item &mdash; not worth their trouble or yours. Hand-edited gear, the dominant attack on a game
+      like this, is detectable without simulating anything.</p>
+  </section>
+
+  <section>
+    <h2>Stack and layout</h2>
+    <p><b>TypeScript on both sides, with the simulation shared as a package.</b> This isn't a
+      preference, it's a constraint: the tuning tables run to 1,551 lines, and the server's ledger has
+      to produce the same numbers as the client's estimate, forever. Any second implementation drifts,
+      and every drift is a payout bug. The game code is already pure TypeScript with no runtime
+      dependencies, so lifting it costs almost nothing.</p>
+<pre><code>packages/
+  sim/      <span class="c">// today's src/game and src/core, unchanged</span>
+  client/   <span class="c">// today's src/render, src/ui, src/main, src/assets</span>
+  server/   <span class="c">// new</span></code></pre>
+    <ul>
+      <li><b>Runtime:</b> Node with Fastify. Small, fast, doesn't argue about TypeScript.</li>
+      <li><b>Database:</b> Postgres. The save is a JSON document, but accounts, audit trail, and
+        ladders are relational and you'll want real queries over them.</li>
+      <li><b>Sessions:</b> an opaque refresh token in <code>localStorage</code>, short-lived access
+        tokens on requests. No cookies, so the client stays a static bundle you can host anywhere.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Data model</h2>
+<pre><code><span class="k">account</span>(id, created_at, email <span class="c">-- null until the player links one</span>, email_verified)
+
+<span class="k">credential</span>(account_id, kind <span class="c">-- 'device' | 'email' | 'oauth'</span>, secret_hash, last_used_at)
+
+<span class="k">character</span>(
+  id, account_id,
+  world_seed,         <span class="c">-- currently the constant 20260812</span>
+  save jsonb,         <span class="c">-- exactly what serialize() produces</span>
+  save_version, content_hash,
+  server_saved_at,    <span class="c">-- the server's clock, the only one that counts</span>
+  settled_at,         <span class="c">-- last time the ledger ran</span>
+  revision            <span class="c">-- increments on every accepted write</span>
+)
+
+<span class="k">ledger_run</span>(character_id, credited_seconds, kills, xp, gold, capped, created_at)
+
+<span class="k">anomaly</span>(character_id, tier, kind, observed jsonb, allowed jsonb, created_at)</code></pre>
+    <p>The last two are the audit trail. You'll want <code>ledger_run</code> the first time someone
+      reports lost progress, and <code>anomaly</code> is how you tune Tier 2 before it rejects
+      anything.</p>
+  </section>
+
+  <section>
+    <h2>API surface</h2>
+    <p>Small on purpose. The client stays a simulation that occasionally syncs.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td class="verb">POST</td><td><code>/v1/session</code></td><td>Create an anonymous account and character, or refresh a token. Returns the character and the offline report.</td></tr>
+          <tr><td class="verb">POST</td><td><code>/v1/session/link</code></td><td>Attach an email or OAuth identity to an existing anonymous account.</td></tr>
+          <tr><td class="verb">GET</td><td><code>/v1/character</code></td><td>Fetch the save, with the ledger already settled against the server clock.</td></tr>
+          <tr><td class="verb">PUT</td><td><code>/v1/character</code></td><td>Upload a save. Requires the revision you last read.</td></tr>
+          <tr><td class="verb">GET</td><td><code>/v1/ladder/:metric</code></td><td>Ranked characters by level, kills, or apex clears. Phase 4.</td></tr>
+          <tr><td class="verb">GET</td><td><code>/v1/world/bosses</code></td><td>The current window, and who has cleared each apex in it. Phase 4.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul>
+      <li><b>Every upload carries the revision you read.</b> A stale revision means another device
+        wrote first. Return 409 with the winning save and let the client re-hydrate. Never merge two
+        saves &mdash; merging item bags silently duplicates gear.</li>
+      <li><b>The body cap is 64&nbsp;KB.</b> A legal save is bounded: 40 bag slots, 6 equipment slots,
+        and a fixed set of id arrays. It can't legitimately grow past a few kilobytes.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>The build order</h2>
+    <p>Each phase ships on its own and is worth having even if the next one never lands.</p>
+    <div class="phases">
+
+      <article class="phase">
+        <span class="num">0</span>
+        <div class="content">
+          <h3>Extract the shared package</h3>
+          <p>Move the simulation and core into <code>packages/sim</code> and have the client import
+            from it. No server, no behavior change. Do this first and alone &mdash; it's the only step
+            that touches the whole tree, and doing it alongside a new server means every failure has
+            two possible causes.</p>
+          <p class="done"><b>Done when</b> <code>npm run verify</code> passes and nothing under
+            <code>packages/sim</code> imports from <code>packages/client</code>.</p>
+        </div>
+      </article>
+
+      <article class="phase">
+        <span class="num">1</span>
+        <div class="content">
+          <h3>Accounts and cloud saves</h3>
+          <p>Anonymous account on first launch. <code>storage.ts</code> gains a remote implementation
+            behind the same three functions it already exports, keeping the local save as a
+            write-through cache &mdash; an idle game that white-screens on a dropped connection is
+            worse than one with no server at all.</p>
+          <p class="done"><b>Done when</b> you can level a character in one browser, open another, and
+            continue it.</p>
+        </div>
+      </article>
+
+      <article class="phase">
+        <span class="num">2</span>
+        <div class="content">
+          <h3>The ledger moves to the server</h3>
+          <p>The server runs <code>runOfflineLedger()</code> against its own clock, applies the report,
+            and returns it for the client to display. <b>Remove the client-side call in the same
+            change</b> &mdash; two appliers means double credit, and double credit that only reproduces
+            after a real absence is a miserable bug to find.</p>
+          <p class="done"><b>Done when</b> setting your device clock forward a day earns you nothing.</p>
+        </div>
+      </article>
+
+      <article class="phase">
+        <span class="num">3</span>
+        <div class="content">
+          <h3>Verification</h3>
+          <p>Tier 1 as a rejection, Tier 2 as a shadow-mode record. Watch the <code>anomaly</code>
+            table for a few weeks, tune the headroom, then decide whether Tier 2 rejects, clamps, or
+            just flags an account.</p>
+          <p class="done"><b>Done when</b> a save with hand-edited gear is rejected, and Tier 2's
+            false-positive rate is low enough to act on.</p>
+        </div>
+      </article>
+
+      <article class="phase">
+        <span class="num">4</span>
+        <div class="content">
+          <h3>The shared world</h3>
+          <p>Ladders, an apex kill feed, and the one the ledger was written for &mdash; ghosts. You
+            already know what another character killed last night and where, so you can show them
+            doing it without simulating anything.</p>
+          <p class="done"><b>Done when</b> the world feels inhabited without a single synchronized
+            position.</p>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>Hazards</h2>
+    <p>Each is cheap to handle now and expensive to discover later.</p>
+    <ul>
+      <li><b>Double-credited offline time.</b> Exactly one applier, always. Covered in Phase 2.</li>
+      <li><b>Item uid collisions.</b> <code>nextUid</code> is a per-save counter. Two devices that
+        diverge and later reconcile can hold two different items with the same uid &mdash; which is
+        why Phase 1 needs revision-checked writes before there's anything to cheat.</li>
+      <li><b>Content drift.</b> The decoder validates item bases, talents, and relics against the
+        content tables. A server on a different build can reject a legal save, or pay out differently.
+        Hash the tables at build time, store the hash with the save, and refuse to settle across a
+        mismatch &mdash; ask the client to reload instead.</li>
+      <li><b>The world seed is a constant.</b> Store it per character from day one anyway. Retrofitting
+        it once players exist means a migration over live saves.</li>
+      <li><b>The 12-hour cap and lazy settling.</b> Settling only on login is correct, but a ladder
+        reading stored values shows absent players frozen. Project pending accrual at read time rather
+        than ticking every character on a cron.</li>
+      <li><b>Sync failures must never interrupt play.</b> Storage errors are already swallowed for this
+        reason. The remote path needs the same discipline: a failed sync retries, it doesn't surface a
+        modal.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Decisions needed</h2>
+    <p>These change the plan materially. Each has an assumed answer so work can start without them.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Decision</th><th>Assumed</th><th>If you disagree</th></tr></thead>
+        <tbody>
+          <tr><td>How far does this go?</td><td>Through Phase 4, in order.</td><td>Stopping at Phase 2 removes the need for Tiers 1 and 2 entirely.</td></tr>
+          <tr><td>Sign-in</td><td>Anonymous device account, optional email link later.</td><td>Requiring email up front simplifies recovery and costs you players.</td></tr>
+          <tr><td>Hosting</td><td>One region, one Node process, managed Postgres.</td><td>Multi-region means the wall-clock apex schedule needs a defined authority for kill credit.</td></tr>
+          <tr><td>Characters per account</td><td>One, matching the current game.</td><td>Multiple is a schema-only change now and a migration later.</td></tr>
+          <tr><td>Cheating consequences</td><td>Flag and record. No bans, no rollbacks, at first.</td><td>Rejecting Tier 2 immediately costs honest players progress while the headroom is untuned.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <span>Wildmarch server backend design &middot; committed as <code>docs/design/server-backend.md</code></span>
+    <span>The Tier 1 spike lives at <code>src/game/verify.ts</code> with 19 tests in <code>tests/unit/verify.test.ts</code>.</span>
+  </footer>
+
+</div>
