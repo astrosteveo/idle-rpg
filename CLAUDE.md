@@ -25,17 +25,14 @@ There is no test framework. This is a game: correctness lives in motion, so chan
 verified by **driving the running game in a real browser**. `window.__game` (the `Game`
 instance) and `window.__renderer` are exposed for exactly this.
 
-If a browser-automation MCP server is connected, use it. Otherwise Playwright is installed
-globally (not a project dependency), so scripts must import it by absolute path and via the
-default export — it is CommonJS:
+Playwright is not a project dependency. Where it is installed globally, a script has to
+import it by absolute path (`npm root -g`) and via the default export, since it is
+CommonJS — `NODE_PATH` will not do it, being ignored for ES modules:
 
 ```js
-import pw from '/home/astrosteveo/.nvm/versions/node/v26.7.0/lib/node_modules/playwright/index.js'
+import pw from '<npm root -g>/playwright/index.js'
 const { chromium } = pw
 ```
-
-(That path is nvm-versioned — re-derive it with `npm root -g` after a Node upgrade.
-`NODE_PATH` does not work here, since it is ignored for ES modules.)
 
 A useful probe reads state after simulating, rather than asserting on pixels:
 
@@ -50,8 +47,8 @@ await page.evaluate(() => ({
 
 Always collect `pageerror` and console errors, **and screenshot the result** — several bugs
 here (upside-down tents, a gold blob over an enemy, terrain checkerboarding) were only
-visible in an image, never in state. Put scratch scripts and screenshots in the session
-scratchpad, not the repo.
+visible in an image, never in state. Probe scripts and their screenshots are throwaway —
+write them outside the repo.
 
 Three things about probes, now that the game persists:
 
