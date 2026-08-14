@@ -1,333 +1,333 @@
 # Server backend design
 
-This page plans the server for Wildmarch. Today the game is entirely client-side: the
-simulation runs in the browser, the save lives in `localStorage`, and nothing leaves the
-machine. This page describes what a server should own, what it can't own without a rewrite,
-and the order to build it in.
+This page plans a **server-authoritative** backend for Wildmarch. The server owns the
+simulation. The client sends input, draws what it's told, and decides nothing.
 
-Read [What the client already gives you](#what-the-client-already-gives-you) before the
-phases. Most of the hard work is already done, and the plan depends on which parts.
+Today the game is entirely client-side: the simulation runs in the browser, the save lives in
+`localStorage`, and nothing leaves the machine. Getting from there to here means changing the
+simulation itself, not just adding a service in front of it. This page describes what changes,
+what it costs, and the order to do it in.
 
-## What the backend is for
+Two numbers decide the shape of the plan, and both are measured rather than assumed. See
+[What it costs to run](#what-it-costs-to-run) and
+[The gap between the ledger and the game](#the-gap-between-the-ledger-and-the-game).
 
-Three goals, in the order they pay off:
+## What authority buys, and what it costs
 
-1. **Your character follows you.** Play on a phone at lunch and a desktop at night, same
-   character. This is the reason most players will notice a server exists.
-2. **Time accrues honestly.** An idle game's core promise is that the world moves while
-   you're away. Right now that promise is kept by your own clock, which you can set to
-   whatever you like.
-3. **The world is shared.** Apex beasts already walk on a schedule every client agrees on.
-   Once there's a server, that schedule can carry a kill feed, ladders, and the ghosts of
-   other players hunting the same ground.
+**Buys:** the save stops being a claim. Progress, loot, and elapsed time become facts the
+server produced. Nothing needs to be inferred from a save file, because no save file is ever
+trusted — there's nothing to verify when the server rolled the dice itself. Ghosts, ladders,
+and a shared world stop being reporting features and become readouts of state the server
+already holds.
 
-Explicit non-goals for the first release:
+**Costs:** the simulation has to become something a server can host. Four properties it
+doesn't have yet — a fixed timestep, randomness split by consequence, no dependency on the
+view, and a wire format separate from its internal state. Plus a transport, a session
+lifecycle, and client-side prediction so movement still feels immediate.
 
-- **No real-time multiplayer.** No shared combat, no player collision, no synchronized
-  positions. See [Why the live simulation can't move to the server](#why-the-live-simulation-cant-move-to-the-server).
-- **No trading or player-to-player item transfer.** Every anti-cheat property below assumes
-  items are generated for one character and never move. Trading turns a tolerable cheat into
-  an economy-wide one.
-- **No password forms on first launch.** An idle game that asks you to sign up before you
-  swing a sword loses most of its players at the sign-up.
+That's a real project. It is also almost entirely mechanical, and the client's existing
+seams — an injected clock, an injected RNG factory, a command/event contract, a pure offline
+ledger, a simulation that already never touches the DOM — mean none of it requires
+re-architecting the game.
 
-## What the client already gives you
+## The trap this design avoids
 
-The client was built with this move in mind, and it shows. These are the seams you get for
-free.
+"Server-authoritative" is often conflated with "deterministic lockstep," and lockstep is where
+projects of this kind die. It requires the client and server to compute bit-identical results,
+which in JavaScript means fighting `Math.sin`, `Math.cos`, `Math.atan2`, and `Math.pow` —
+none of which are specified to the last bit, and all of which differ between V8,
+SpiderMonkey, and JavaScriptCore.
 
-| Seam | Where | Why it matters |
-| --- | --- | --- |
-| One file knows about storage | `src/ui/storage.ts` | Swapping `localStorage` for HTTP touches nothing in the simulation. |
-| The save is a plain object | `EcsSimulation.serialize()` in `src/game/state.ts` | The wire format already exists. You don't have to invent one. |
-| The save decoder rejects everything it doesn't recognize | `readSave()` in `src/game/save.ts` | This is already a server-grade input validator, field by field, with bounds. Lift it verbatim. |
-| The clock is injected | `SimulationDependencies.clock` | The server can hand the simulation its own time instead of the device's. |
-| Randomness is injected | `SimulationDependencies.rngFactory` | Any server-side roll is reproducible from a seed you store. |
-| The offline ledger is pure | `runOfflineLedger()` in `src/game/offline.ts` | No DOM, no clock of its own, no `Game`. It runs on a server today, unmodified. |
-| The world is a seed | `World` in `src/game/world.ts` | The server stores one integer, not a map. Terrain, camps, dens, and landmarks all derive. |
-| Apex schedules are wall-clock | `bossWindow()` in `src/game/content.ts` | Every client already agrees on when an apex walks. The server doesn't have to broadcast a schedule, only record who turned up. |
+**Wildmarch does not need determinism, and the plan is built so it never does.** Three
+reasons, all specific to this game:
 
-The comment at the top of `offline.ts` says the ledger is "the piece a server runs to settle
-a character's absence." That's exactly the plan below.
+- **There is no shared space.** Every player has their own world, seeded from one integer. No
+  two clients ever need to agree on where a wolf is.
+- **The client never decides anything.** It doesn't roll damage, pick loot, or run AI. If it
+  computed a slightly different number it would have nowhere to put it.
+- **Combat is automatic.** The player controls movement and two ability buttons. Nobody aims,
+  so nobody notices 80 ms of latency on a wolf's approach.
 
-## Why the live simulation can't move to the server
+So the client predicts **its own movement only**, and interpolates everything else from
+snapshots. That's a small, well-defined piece of shared code — terrain collision and position
+integration — rather than a bit-exact copy of the whole simulation.
 
-The moment-to-moment combat simulation is **not** replayable, and it can't be made
-authoritative without a rewrite. Three reasons, all load-bearing:
+## What it costs to run
 
-- **One RNG stream serves everything.** `EcsSimulation.rand` is consumed by combat damage
-  variance, by loot rolls, and also by float-text offsets, corpse lean, and beast wander
-  points (`src/game/state.ts`). Cosmetic draws and consequential draws advance the same
-  sequence, so any difference in what got drawn changes what drops.
-- **Frame timing feeds the simulation.** `beginFrameLoop` in `src/main.ts` quantizes the real
-  frame delta and passes it to `update()`. A 60 Hz client and a 144 Hz client take different
-  numbers of steps, so they make different numbers of `rand()` calls.
-- **The view rectangle reaches the simulation.** `setView()` passes the camera to the
-  simulation. Anything that varies with window size can't be reproduced from inputs alone.
+The load-bearing question for any authoritative design is whether you can afford to run the
+simulation for everyone at once. Measured, not estimated — `npm run bench` runs the game
+headless with an injected clock, exactly as the server will.
 
-Making the live loop authoritative means separating cosmetic randomness from consequential
-randomness, moving to a fixed timestep, and removing the view from the simulation's inputs.
-That's a real project, and it buys you a property this game doesn't need yet.
+| Tick rate | Cost per tick | Real-time factor | Simulations per core |
+| --- | --- | --- | --- |
+| 10 Hz | 0.046 ms | 2,194× | ~2,190 |
+| **20 Hz** | **0.037 ms** | **1,358×** | **~1,360** |
+| 30 Hz | 0.036 ms | 923× | ~920 |
+| 60 Hz | 0.036 ms | 466× | ~470 |
 
-**Design the server so it never needs that property.**
+Each run is ten simulated minutes of auto-battle that actually fights: 150–177 kills, level 9
+to 11 by the end. Cost per tick is flat across rates, because it's dominated by iterating
+roughly 120 beasts across 52 spawn nodes — so the tick rate is a straight trade against
+capacity.
 
-## The trust model: verify, don't simulate
+**20 Hz is the pick.** It's four times the fastest attack interval in the game, it costs
+0.74 ms of CPU per simulated second, and it leaves an order of magnitude of headroom.
 
-The server doesn't re-run combat. It checks that the save a client hands back could have come
-from an honest game. Three tiers, from strongest to weakest.
+Treat these as an upper bound. They're single-threaded, on one machine, with no network I/O,
+no serialization, and no GC pressure from either. Budget for a tenth of the theoretical
+figure in production and one eight-core box still carries a four-figure concurrent player
+count. **Authority is affordable here**, and the reason is that Wildmarch's world is small,
+per-player, and resolved by rules rather than physics.
 
-### Tier 1: exact invariants
+## The architecture
 
-These are closed-form facts about a legal save. Any violation is proof of tampering, not a
-signal, so the server can reject outright.
-
-- **Items match their generator.** `makeItem()` in `src/game/loot.ts` is nearly deterministic
-  given `(base, ilvl, rarity)`. The `value` field is exactly
-  `round(base.value + ilvl * 3.4 + rarity * 22)`. A weapon's `dmg` is exactly
-  `round(base.dmg * ilvl + 3 + rarity * 2.2)`. The affix count equals the rarity, drawn
-  without replacement from a four-key pool, and each magnitude falls in a ±25% band around
-  `1.1 + ilvl * 0.38 + rarity * 0.5`. Relics from `makeUnique()` are fully closed-form and
-  always have `value === 0` and `rarity === 4`. **This is the strongest check available**, and
-  it kills the dominant attack on a game like this — editing your gear in devtools.
-
-  Measured against the implementation in `src/game/verify.ts`: damage, armour, and value lines
-  are exact, so any edit to them is caught. Affix magnitudes are the only soft spot, and an
-  inflated affix is caught at 1.3× on average, at 1.6× across most of the level range, and
-  always by 2.3×. A cheater's entire remaining budget is a fraction of one affix line on one
-  item — which is not worth their trouble or yours.
-- **Experience matches level.** `xpNext` must equal `xpForLevel(level)` and `xp` must be less
-  than it. Both from `src/game/content.ts`.
-- **Talents match level.** You get one pick per unlocked row, so `talents.length` can't exceed
-  the number of rows in `TALENT_ROWS` whose `level` you've reached, and no two picks can come
-  from the same row.
-- **Milestones match counters.** Every id in `claimed` has a `metric` and a `threshold` in
-  `MILESTONES`. The character's counters must actually meet it.
-- **Apex kills match the clock.** `bossCleared[id]` stores a boss window. No stored window may
-  exceed `bossWindow(serverNow)`, and it may advance by at most one window per elapsed period.
-  This is an exact bound on the largest single lump of experience in the game.
-- **Monotonic fields only grow.** Kills, gold earned, quest index, discovered camps, seen
-  landmarks, and found relics never decrease. A save that moves one backwards is either a
-  rollback attack or a bug worth knowing about.
-
-### Tier 2: rate ceilings
-
-`killsPerHour()` in `src/game/offline.ts` already computes how fast a given build kills a
-given species. The server reuses it as a cheat oracle: derive stats from the **previously
-stored** save, compute the best rate that build could achieve on the best ground it can
-reach, multiply by elapsed wall-clock seconds, and add a generous headroom factor. Claimed
-kills, experience, and gold above that ceiling get flagged.
-
-The ledger's own rate already discounts by `OFFLINE.efficiency` (0.72) for healing, pathing,
-and respawn waits. Live play beats that, so the ceiling needs headroom — start around 3× and
-tune it against real data.
-
-This tier is a signal, not proof. Run it in shadow mode first: record, don't reject.
-
-### Tier 3: the clock
-
-The server stamps `savedAt` itself and ignores the client's. That single change makes the
-offline ledger honest, because the ledger is a pure function of elapsed time and the client no
-longer gets a vote on elapsed time.
-
-## Stack and layout
-
-**Use TypeScript on both sides and share the simulation as a package.** This isn't a
-preference, it's a constraint: `src/game/content.ts` is 1,551 lines of tuning tables, and the
-server's ledger has to produce the same numbers as the client's estimate, forever. Any second
-implementation drifts, and every drift is a payout bug. The game code is already pure
-TypeScript with no runtime dependencies, so lifting it costs almost nothing.
+One simulation instance per active session. No shared entity space, no interest management
+across players, no cross-session anything.
 
 ```
-packages/
-  sim/          the current src/game and src/core, unchanged
-                content, world, save, offline, loot, types, math
-  client/       the current src/render, src/ui, src/main, src/assets
-  server/       new
-apps/           (nothing yet)
+client                          server
+------                          ------
+input  ──── seq, dt, move ────▶  session
+                                   │
+render ◀─── snapshot deltas ────  simulation (20 Hz, authoritative)
+  │                                │
+  └─ movement predictor            └─ save / hibernate ──▶ Postgres
+     (shared collision code)
 ```
 
-Everything else follows from that:
+### Three tiers of authority
 
-- **Runtime:** Node with Fastify. Small, fast, and it doesn't argue about TypeScript.
-- **Database:** Postgres. The save is a JSON document, but the surrounding records
-  (accounts, audit trail, ladders) are relational and you'll want real queries over them.
-  A document store buys nothing here.
-- **Sessions:** an opaque refresh token in `localStorage`, short-lived access tokens on
-  requests. No cookies, so the client stays a static bundle you can host anywhere.
+An idle game can't keep a live simulation running for everyone forever — most players are
+away most of the time, and simulating an empty room is pure cost. So authority degrades in
+tiers, and the measurements above set the boundaries.
 
-## Data model
+| Tier | When | How | Cost |
+| --- | --- | --- | --- |
+| **Live** | Connected | Real simulation at 20 Hz | 0.74 ms CPU per second |
+| **Catch-up** | Reconnect within 15 minutes | Fast-forward the real simulation | 0.66 s CPU, once |
+| **Ledger** | Longer absences, capped at 12 h | `runOfflineLedger()`, the rate model | Microseconds |
 
-```sql
-account(
-  id            uuid primary key,
-  created_at    timestamptz,
-  email         text unique null,      -- null until the player links one
-  email_verified boolean
-)
+The catch-up tier is the one the measurements unlocked, and it's worth having. A dropped
+connection on a train shouldn't hand you a different outcome than staying online, and at
+1,358× real time, replaying fifteen minutes costs two thirds of a second. Beyond that the
+rate model takes over, because a twelve-hour absence would cost 32 seconds of CPU to replay
+and nobody is watching closely enough to justify it.
 
-credential(
-  account_id    uuid references account,
-  kind          text,                  -- 'device' | 'email' | 'oauth'
-  secret_hash   text,
-  created_at    timestamptz,
-  last_used_at  timestamptz
-)
+`runOfflineLedger()` survives this design unchanged in shape but changes in status. It stops
+being a client-side estimate and becomes the definitive account of a long absence. That
+promotion is why the next section matters.
 
-character(
-  id              uuid primary key,
-  account_id      uuid references account,
-  world_seed      bigint,              -- currently the constant 20260812
-  save            jsonb,               -- exactly what serialize() produces
-  save_version    int,                 -- SAVE_VERSION
-  content_hash    text,                -- see the hazard below
-  server_saved_at timestamptz,         -- the server's clock, the only one that counts
-  settled_at      timestamptz,         -- last time the ledger ran
-  revision        bigint,              -- increments on every accepted write
-  updated_at      timestamptz
-)
+## The gap between the ledger and the game
 
-ledger_run(
-  id               bigserial,
-  character_id     uuid references character,
-  credited_seconds int,
-  kills            int,
-  xp               bigint,
-  gold             bigint,
-  capped           boolean,
-  created_at       timestamptz
-)
+`OFFLINE.efficiency` is 0.72, and states the intent plainly: an hour away should be worth
+about 0.72 of an hour played, the discount covering healing, pathing, and waiting on
+respawns.
 
-anomaly(
-  id           bigserial,
-  character_id uuid references character,
-  tier         int,                    -- 1 = proof, 2 = signal
-  kind         text,                   -- 'item-stats' | 'rate-xp' | 'boss-window' | ...
-  observed     jsonb,
-  allowed      jsonb,
-  created_at   timestamptz
-)
-```
+**Measured, it pays about half that, and the shortfall is stable.** Running the live
+simulation for one hour and the ledger for the same hour, from the same save:
 
-`ledger_run` and `anomaly` are the audit trail. You'll want both the first time someone
-reports lost progress, and the second one is how you tune Tier 2 before it rejects anything.
+| Character | Live kills | Ledger kills | Ratio |
+| --- | --- | --- | --- |
+| Level 4, Greenwood Vale | 1,787 | 884 | 0.49× |
+| Level 11, Greenwood Vale | 1,917 | 968 | 0.50× |
+| Level 18, Wolfden Thicket | 1,982 | 1,006 | 0.51× |
 
-## API surface
+Gold is worse and noisier — 0.16× to 0.27× — and experience worse still, though both are
+confounded: auto-battle roams by quest objective rather than by the assigned ground, so the
+live character drifts into richer regions and outlevels the one the ledger holds in place.
+The kills column is the trustworthy one, and 0.49 / 0.50 / 0.51 across three levels and two
+regions is too consistent to be roaming noise.
 
-Small on purpose. The client stays a simulation that occasionally syncs.
+This is a live bug in the shipped game, not something the server introduces. But it gets
+sharper under this design for two reasons:
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `POST` | `/v1/session` | Create an anonymous account and character, or refresh a token. Returns the character and the offline report. |
-| `POST` | `/v1/session/link` | Attach an email or OAuth identity to an existing anonymous account. |
-| `GET` | `/v1/character` | Fetch the current save, with the ledger already settled against the server clock. |
-| `PUT` | `/v1/character` | Upload a save. Requires the `revision` you last read. Returns the new revision. |
-| `GET` | `/v1/ladder/:metric` | Ranked characters by level, kills, or apex clears. Phase 4. |
-| `GET` | `/v1/world/bosses` | The current window, and who has cleared each apex in it. Phase 4. |
+- **The ledger becomes definitive.** Today it's an estimate a client applies to itself.
+  Afterwards it's the server's account of your night.
+- **The tier boundary becomes visible.** If catch-up pays full rate and the ledger pays half,
+  then at the fifteen-minute mark the payout halves. Players find cliffs like that in about a
+  day, and the optimal play becomes reconnecting every fourteen minutes.
 
-Two rules that keep this honest:
+`tests/unit/ledger-agreement.test.ts` gates this. It's a characterization test: it asserts
+where the ratio sits today rather than where it should sit, because closing the gap is a
+balance decision — raise the ledger's rate, or accept a lower number as the real intent —
+and that's your call, not a bug fix. Both sides are fully deterministic, so any movement in
+that test is a real change in the model.
 
-- **`PUT` carries the revision you read.** A stale revision means another device wrote first.
-  Return 409 with the winning save and let the client re-hydrate. Never merge two saves —
-  merging item bags silently duplicates gear.
-- **The body cap is 64 KB.** A legal save is a bounded structure: 40 bag slots, 6 equipment
-  slots, and a fixed set of id arrays. It can't legitimately grow past a few kilobytes.
+**Fix this before Phase 3 ships**, because that's when the ledger stops being advisory.
+
+## The rewrite
+
+Eight items. Ordered by dependency, and each one is independently reviewable.
+
+### R1. Fixed timestep
+
+The simulation steps at exactly 20 Hz. The client accumulates real time into fixed steps and
+renders with the leftover as an interpolation factor.
+
+This **deletes** the `quantise()` median-filter in `src/main.ts` — the sampling buffer and
+period estimation exist solely to stabilize a variable frame delta, and a fixed step makes
+the whole heuristic unnecessary.
+
+### R2. Split the randomness by consequence
+
+`EcsSimulation.rand` is one stream serving both dice that matter and dice that don't. Damage
+variance, crit rolls, loot, rarity, AI state transitions, wander points, and respawn jitter
+share a sequence with float-text offsets, corpse lean, effect angles, and spark positions.
+
+Split it in two:
+
+- **`sim`** — anything that changes the outcome. Server-only, seeded per character, its
+  position saved so a session resumes mid-stream.
+- **`fx`** — anything only seen. Client-only, seeded from anything at all.
+
+Roughly 25 call sites in `state.ts`, each needing a one-line classification. It's the most
+invasive item and the most mechanical. It also pays off beyond the server: once cosmetic
+draws stop perturbing the loot stream, the simulation becomes replayable for debugging.
+
+### R3. Take the view out of the simulation
+
+`setView()` feeds the camera rectangle into the simulation, and exactly one rule reads it:
+`shouldGiveUp()`, which ends a chase when a beast is dragged off the visible screen.
+
+That's a fairness bug independent of any server — an ultrawide monitor currently gets longer
+chases than a phone. Replace the screen test with a fixed leash in world units. `setView()`
+stays on the client as a rendering concern.
+
+### R4. Separate simulation state from wire state
+
+`Enemy` has 35 fields, most of them server-side bookkeeping the client never draws: `ax`,
+`ay`, `wx`, `wy`, `aggroRange`, `leash`, `attackRange`, `stateT`, `windup`, `special`,
+`deadT`, `nodeId`. Serialized naively it costs **582 bytes per beast**, and a full snapshot
+of 122 beasts is **71 KB**. At 20 Hz that's 1.4 MB/s per player, which is absurd.
+
+Define an `EnemyView` of about twelve fields — id, sheet, position, facing, health fraction,
+state, animation phase, hit flash — quantized into roughly a dozen bytes. Scope it to an
+interest radius rather than the whole world, and send deltas at 10 Hz rather than every tick.
+Thirty visible beasts then costs about 3.6 KB/s. **The wire format is the real bottleneck in
+this design, not the simulation**, and it's the one place worth spending effort on encoding.
+
+### R5. Make the simulation host-agnostic
+
+Mostly already true: no DOM, an injected clock, an injected RNG factory, and a `Simulation`
+interface with commands, snapshots, and drained events. What remains is removing the last
+implicit assumptions that a renderer is present, and moving `src/game` and `src/core` into a
+package both sides import.
+
+### R6. Transport and session lifecycle
+
+WebSocket. Client sends batched input frames stamped with a sequence number; server replies
+with snapshot deltas and the last input sequence it processed. Session states are
+**connecting → live → draining → hibernated**, with hibernation serializing the character and
+stopping the tick.
+
+### R7. Client-side prediction, movement only
+
+Extract position integration and terrain collision into a module both sides call. The client
+keeps a ring buffer of unacknowledged inputs; when the server acknowledges a sequence number
+with an authoritative position, the client rewinds and replays the rest.
+
+Abilities are optimistic: the button lights, the cooldown starts, the animation plays, and
+the server confirms or rejects. Damage numbers appear only when the server says so — fine,
+because you aren't aiming.
+
+Everything else interpolates between snapshots with about a 100 ms buffer.
+
+### R8. Reconcile the ledger with the simulation
+
+Covered above. It's listed here because it's a shipping requirement, not a nice-to-have.
+
+## What survives from the client-authoritative plan
+
+- **`readSave()` stays.** It's still the decoder for anything arriving from outside, and under
+  authority the outside includes existing `localStorage` saves being imported.
+- **`src/game/verify.ts` stays, retargeted.** Under full authority the server generates every
+  item, so nothing needs verifying for anti-cheat. Two uses remain: validating imported saves
+  at migration, and asserting internal invariants in tests, where it catches server bugs
+  rather than cheaters. Its 19 tests keep earning their place.
+- **The wall-clock apex schedule stays.** `bossWindow()` needs no server to agree across
+  clients, and now the server can record who turned up.
+- **The data model stays**, minus the anomaly table. Authority makes the audit trail for
+  cheating unnecessary; keep `ledger_run` for support questions.
 
 ## The phases
 
+Each ships alone and is worth having if the next never lands.
+
 ### Phase 0: extract the shared package
 
-Move `src/game` and `src/core` into `packages/sim` and have the client import from it. No
-server, no behavior change. The existing suites — `tests/unit/*` and the Playwright smoke
-test — are the acceptance criteria: they all pass, unchanged.
+Move `src/game` and `src/core` into `packages/sim`; the client imports from it. No server, no
+behavior change.
 
-Do this first and alone. It's the only step that touches the whole tree, and doing it while
-also writing a server means every failure has two possible causes.
+**Done when:** `npm run verify` passes and nothing in `packages/sim` imports from the client.
 
-**Done when:** `npm run verify` passes and no file under `packages/sim` imports from
-`packages/client`.
+### Phase 1: make the simulation hostable
 
-### Phase 1: accounts and cloud saves
+R1 through R5, in that order. Still no server — the game runs in the browser exactly as it
+does now, on a fixed timestep, with split randomness, no view dependency, and a wire type it
+doesn't yet use.
 
-Anonymous account on first launch. `storage.ts` gains a remote implementation behind the same
-three functions it already exports. Keep the local save as a write-through cache so the game
-still runs with the network down — an idle game that white-screens on a dropped connection is
-worse than one with no server at all.
+This is the rewrite, and it lands with the game playable at every step.
 
-The server validates every upload with `readSave()` and stores it. No ledger yet, no rate
-checks yet.
+**Done when:** the browser game plays identically, `npm run bench` still reports its capacity,
+and the simulation compiles with no reference to `window` or a view rectangle.
 
-**Done when:** you can level a character on one browser, open another, and continue it.
+### Phase 2: the server runs the simulation
 
-### Phase 2: the ledger moves to the server
+R6 and R7. Accounts, WebSocket sessions, one simulation per connection, prediction and
+interpolation on the client. No offline handling yet: disconnect ends the session and the
+character is saved where it stood.
 
-`GET /v1/character` runs `runOfflineLedger()` using `server_saved_at` and the server's clock,
-applies the report, stores the result, and returns both the save and the report for the client
-to display.
+**Done when:** you can play a full session with the simulation on the server and movement
+still feels immediate.
 
-**Remove the client-side call in `src/main.ts` in the same change.** Two appliers means double
-credit, and double credit that only reproduces after a real absence is a miserable bug to
-find.
+### Phase 3: absence
 
-**Done when:** setting your device clock forward a day earns you nothing.
+Hibernation, the catch-up tier, and the ledger tier. R8 ships here or before.
 
-### Phase 3: verification
-
-Implement Tier 1 and Tier 2 as a validation pass over every accepted upload. Ship Tier 1 as a
-rejection and Tier 2 as a shadow-mode record. Watch `anomaly` for a few weeks, tune the
-headroom, then decide whether Tier 2 rejects, clamps, or just flags an account.
-
-**Done when:** a save with hand-edited gear is rejected, and the false-positive rate on Tier 2
-is low enough to act on.
+**Done when:** a fifteen-minute disconnect resumes exactly, a twelve-hour one settles through
+the ledger, and the payout at the boundary doesn't jump.
 
 ### Phase 4: the shared world
 
-Ladders, an apex kill feed, and — the one the ledger was written for — ghosts. The comment in
-`offline.ts` notes that a ghost's visible behavior is "a dramatisation" of the ledger. That's
-the cheapest multiplayer this design can offer: you already know what another character killed
-last night and where, so you can show them doing it without simulating anything.
+Ladders, an apex kill feed, and ghosts. All readouts of state the server already holds.
 
 ## Hazards
 
-Each of these is cheap to handle now and expensive to discover later.
-
-- **Double-credited offline time.** Covered in Phase 2. Exactly one applier, always.
-- **Item uid collisions.** `nextUid` is a per-save counter (`UidSequence` in `loot.ts`). Two
-  devices that diverge and later reconcile can hold two different items with the same uid.
-  Revision-checked writes prevent divergence in the first place, which is why Phase 1 needs
-  them even before there's anything to cheat.
-- **Content drift.** `readSave()` validates item bases, talents, milestones, and relics
-  against the tables in `content.ts`. If the server runs a different build from the client,
-  a legal save can be rejected — or worse, a payout can differ. Hash the content tables at
-  build time, store the hash with the save, and refuse to settle a ledger across a mismatch.
-  Ask the client to reload instead.
-- **The world seed is a constant.** `new World()` defaults to `20260812`, and `readSave()`
-  rejects any save whose seed doesn't match. Store the seed per character from day one, even
-  though it's the same value for everybody today. Retrofitting it once players exist means a
-  migration over live saves.
-- **The 12-hour cap and lazy settling.** `OFFLINE.capHours` is 12. If the server settles only
-  when you log in, a three-day absence still credits 12 hours, which is intended. But a ladder
-  that reads stored values will show absent players frozen. Project their pending accrual at
-  read time rather than ticking every character on a cron.
-- **Quota and offline failures must never interrupt play.** `storage.ts` already swallows
-  storage errors for this reason. The remote implementation needs the same discipline: a
-  failed sync retries, it doesn't surface a modal.
+- **The tier boundary.** Covered above. Catch-up and ledger must pay comparably or players
+  will farm the seam.
+- **Hibernation must be atomic.** Serializing a character while a tick is in flight is how
+  duplicated loot happens. Drain, then snapshot, then stop.
+- **The RNG split is easy to get subtly wrong.** A draw classified as cosmetic that actually
+  feeds an AI decision reintroduces a dependency between what's drawn and what happens. Review
+  R2 call site by call site, not file by file.
+- **Interpolation and the 12-hour cap don't compose.** A player watching an interpolated world
+  when the session was settled by a rate model will see beasts pop into place. Settle first,
+  then start the tick, then start streaming.
+- **Content drift between client and server.** Hash the content tables at build time and refuse
+  a session across a mismatch, asking the client to reload. Under authority this matters more,
+  not less: the client's renderer indexes into the same tables.
+- **The world seed is a constant.** `new World()` defaults to `20260812`. Store it per
+  character from day one, even though it's the same for everybody today.
+- **Prediction divergence on terrain.** The movement predictor and the server must share
+  collision code exactly. If they drift, players rubber-band at walls — the one place in this
+  design where a small numerical disagreement is visible.
 
 ## Decisions needed from you
 
-These change the plan materially, and I've assumed an answer for each so the work can start.
-
 | Decision | Assumed | If you disagree |
 | --- | --- | --- |
-| How far does this go? | Through Phase 4, built in order, each phase shippable alone. | Stopping at Phase 2 removes the need for Tier 1 and Tier 2 entirely. |
-| Sign-in | Anonymous device account first, optional email link later. | Requiring email up front simplifies account recovery and costs you players. |
-| Hosting | A single region, one Node process, managed Postgres. | Multi-region means the wall-clock apex schedule needs a defined authority for kill credit. |
-| One character per account | Yes, matching the current game. | Multiple characters is a schema-only change now and a migration later. |
-| Cheating consequences | Flag and record. No bans, no rollbacks, at first. | Rejecting Tier 2 immediately will cost honest players progress while the headroom is untuned. |
+| Tick rate | 20 Hz | 10 Hz doubles capacity and coarsens the fastest attack interval; 30 Hz costs a third of capacity for little visible gain. |
+| Catch-up window | 15 minutes | Longer is affordable as a background job but widens the window where a stale client is showing an old world. |
+| Closing the ledger gap | Raise the ledger's rate to meet the intended 0.72 | Lowering `OFFLINE.efficiency` to match reality is equally valid and cheaper, but makes idling meaningfully worse. |
+| Sign-in | Anonymous device account, optional email link later | Requiring email up front simplifies recovery and costs you players. |
+| Existing saves | Import them once, validated by `verify.ts` | Starting everyone fresh is simpler and throws away real characters. |
+| Wire encoding | Binary, quantized, interest-scoped | JSON is simpler and costs roughly 40× the bandwidth. |
 
-## What's already proven
+## Measurements in this repo
 
-`src/game/verify.ts` implements the Tier 1 item check described above, and
-`tests/unit/verify.test.ts` runs it against thousands of generated items and a set of
-tampered ones. It's a spike, not the server: it exists so the load-bearing claim of this
-design — that hand-edited gear is detectable without simulating anything — is a measured
-result rather than an assertion.
+Both numbers this plan rests on are reproducible.
+
+```bash
+npm run bench     # capacity: ms per tick, simulations per core, snapshot size
+npm test          # includes tests/unit/ledger-agreement.test.ts
+```

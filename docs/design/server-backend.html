@@ -109,7 +109,7 @@
   .dek {
     font-size: 1.16rem;
     color: var(--ink-soft);
-    max-width: 40ch;
+    max-width: 42ch;
     margin: 0;
     text-wrap: pretty;
   }
@@ -158,7 +158,7 @@
   li::marker { color: var(--brass); }
 
   a { color: var(--steel); text-underline-offset: .16em; }
-  a:focus-visible, .phase:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; }
+  a:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; }
 
   code {
     font-family: var(--mono);
@@ -183,8 +183,8 @@
     color: var(--ink-soft);
   }
   pre code { background: none; border: 0; padding: 0; font-size: inherit; }
-  pre .k { color: var(--brass); }
   pre .c { color: var(--ink-mute); font-style: italic; }
+  pre .a { color: var(--brass); }
 
   /* ---- Tables ---- */
   .scroll { overflow-x: auto; border: 1px solid var(--rule); background: var(--surface); }
@@ -206,14 +206,9 @@
     white-space: nowrap;
   }
   tbody tr:last-child td { border-bottom: 0; }
-  td code { white-space: nowrap; }
-  .verb {
-    font-family: var(--mono);
-    font-size: .72rem;
-    font-weight: 700;
-    letter-spacing: .04em;
-    color: var(--brass);
-  }
+  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.pick td { background: var(--brass-lo); }
+  tr.pick td:first-child { font-weight: 700; }
 
   /* ---- Callout ---- */
   .callout {
@@ -225,6 +220,7 @@
     flex-direction: column;
     gap: .7rem;
   }
+  .callout.good { background: var(--steel-lo); border-left-color: var(--steel); }
   .callout .label {
     font-family: var(--util);
     font-size: .68rem;
@@ -233,9 +229,10 @@
     text-transform: uppercase;
     color: var(--warn);
   }
+  .callout.good .label { color: var(--steel); }
   .callout p { font-size: .95rem; }
 
-  /* ---- Trust tiers ---- */
+  /* ---- Tiers of authority ---- */
   .tiers { display: flex; flex-direction: column; gap: 1rem; }
   .tier {
     background: var(--surface);
@@ -256,6 +253,7 @@
     background: var(--brass);
     padding: .18rem .45rem;
     align-self: start;
+    white-space: nowrap;
   }
   .tier.t2 .n { background: var(--steel); }
   .tier.t3 .n { background: var(--ink-mute); }
@@ -270,9 +268,10 @@
     border-top: 1px solid var(--rule);
     padding-top: .55rem;
     margin-top: .2rem;
+    font-variant-numeric: tabular-nums;
   }
 
-  /* ---- Measured result ---- */
+  /* ---- Measured figures ---- */
   .figures {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
@@ -289,22 +288,24 @@
     color: var(--brass);
     font-variant-numeric: tabular-nums;
   }
-  .figure .l {
-    font-family: var(--util);
-    font-size: .72rem;
-    line-height: 1.35;
-    color: var(--ink-mute);
+  .figure .l { font-family: var(--util); font-size: .72rem; line-height: 1.35; color: var(--ink-mute); }
+
+  /* ---- Rewrite items ---- */
+  .items { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+  .item { background: var(--surface); padding: 1.05rem 1.2rem; display: grid; grid-template-columns: 2.5rem 1fr; gap: .4rem .9rem; }
+  .item .tag {
+    font-family: var(--mono);
+    font-size: .78rem;
+    font-weight: 700;
+    color: var(--brass);
+    padding-top: .1rem;
   }
+  .item h3 { margin: 0; font-family: var(--display); font-size: 1.02rem; font-weight: 600; text-transform: none; letter-spacing: 0; }
+  .item .body { grid-column: 2; font-size: .93rem; display: flex; flex-direction: column; gap: .5rem; }
 
   /* ---- Phase spine: numbering encodes a real build order ---- */
   .phases { display: flex; flex-direction: column; }
-  .phase {
-    display: grid;
-    grid-template-columns: 2.6rem 1fr;
-    gap: 0 1.1rem;
-    padding-bottom: 1.9rem;
-    position: relative;
-  }
+  .phase { display: grid; grid-template-columns: 2.6rem 1fr; gap: 0 1.1rem; padding-bottom: 1.9rem; position: relative; }
   .phase::before {
     content: "";
     position: absolute;
@@ -358,8 +359,8 @@
   @media (max-width: 34rem) {
     body { font-size: 16px; }
     .page { padding: 2.5rem 1.1rem 4rem; gap: 2.5rem; }
-    .tier { grid-template-columns: 1fr; }
-    .tier .body, .tier .verdict { grid-column: 1; }
+    .tier, .item { grid-template-columns: 1fr; }
+    .tier .body, .tier .verdict, .item .body { grid-column: 1; }
     .phase { grid-template-columns: 2rem 1fr; gap: 0 .8rem; }
     .phase .num { width: 2rem; height: 2rem; font-size: .75rem; }
     .phase::before { left: .97rem; top: 1.7rem; }
@@ -371,274 +372,340 @@
   <header class="masthead">
     <p class="eyebrow">Wildmarch &middot; Technical plan</p>
     <h1>Server Backend Design</h1>
-    <p class="dek">How an entirely client-side idle RPG grows a server without rewriting the
-      simulation it already has.</p>
+    <p class="dek">The server owns the simulation. The client sends input, draws what it's told,
+      and decides nothing.</p>
     <div class="meta">
       <span><b>Repo</b> astrosteveo/idle-rpg</span>
       <span><b>Branch</b> worktree-server-backend-design</span>
-      <span><b>Status</b> Design, with one claim proven in code</span>
+      <span><b>Basis</b> Two measurements, both reproducible in-repo</span>
     </div>
   </header>
 
   <section>
-    <h2>What the backend is for</h2>
-    <p>Today the simulation runs in the browser, the save lives in <code>localStorage</code>, and
-      nothing leaves the machine. Three goals justify changing that, in the order they pay off.</p>
-    <ul>
-      <li><b>Your character follows you.</b> Play on a phone at lunch and a desktop at night, same
-        character. This is the reason most players will notice a server exists.</li>
-      <li><b>Time accrues honestly.</b> An idle game promises the world moves while you're away.
-        Right now that promise is kept by your own clock, which you can set to whatever you like.</li>
-      <li><b>The world is shared.</b> Apex beasts already walk on a schedule every client agrees on.
-        A server turns that schedule into a kill feed, ladders, and the ghosts of other players
-        hunting the same ground.</li>
-    </ul>
-    <h3>Non-goals for the first release</h3>
-    <ul>
-      <li><b>No real-time multiplayer.</b> No shared combat, no synchronized positions.</li>
-      <li><b>No trading.</b> Every verification property below assumes items are generated for one
-        character and never move. Trading turns a tolerable cheat into an economy-wide one.</li>
-      <li><b>No sign-up wall.</b> An idle game that asks for an email before you swing a sword loses
-        most of its players at the sign-up.</li>
-    </ul>
+    <h2>What authority buys, and what it costs</h2>
+    <p><b>Buys:</b> the save stops being a claim. Progress, loot, and elapsed time become facts the
+      server produced. There is nothing to verify when the server rolled the dice itself. Ghosts,
+      ladders, and a shared world stop being reporting features and become readouts of state the
+      server already holds.</p>
+    <p><b>Costs:</b> the simulation has to become something a server can host &mdash; a fixed
+      timestep, randomness split by consequence, no dependency on the view, and a wire format
+      separate from its internal state. Plus transport, session lifecycle, and client-side
+      prediction so movement still feels immediate.</p>
+    <p>That's a real project. It's also almost entirely mechanical: the client already has an
+      injected clock, an injected RNG factory, a command and event contract, a pure offline ledger,
+      and a simulation that never touches the DOM. None of the rewrite requires re-architecting the
+      game.</p>
   </section>
 
   <section>
-    <h2>What the client already gives you</h2>
-    <p>The client was built with this move in mind, and it shows. These seams come for free.</p>
+    <h2>The trap this design avoids</h2>
+    <div class="callout">
+      <span class="label">Where projects like this die</span>
+      <p>&ldquo;Server-authoritative&rdquo; gets conflated with &ldquo;deterministic
+        lockstep.&rdquo; Lockstep needs bit-identical results on both sides, which in JavaScript
+        means fighting <code>Math.sin</code>, <code>Math.cos</code>, <code>Math.atan2</code>, and
+        <code>Math.pow</code> &mdash; none specified to the last bit, all differing between V8,
+        SpiderMonkey, and JavaScriptCore.</p>
+    </div>
+    <p><b>Wildmarch never needs determinism, and this plan is built so it never does.</b> Three
+      reasons, all specific to this game:</p>
+    <ul>
+      <li><b>There is no shared space.</b> Every player has their own world from one seed. No two
+        clients ever need to agree on where a wolf is.</li>
+      <li><b>The client never decides anything.</b> It doesn't roll damage, pick loot, or run AI.
+        A slightly different number would have nowhere to go.</li>
+      <li><b>Combat is automatic.</b> The player controls movement and two buttons. Nobody aims, so
+        nobody notices 80&nbsp;ms of latency on a wolf's approach.</li>
+    </ul>
+    <p>So the client predicts <b>its own movement only</b> and interpolates everything else. That's
+      a small shared module &mdash; terrain collision and position integration &mdash; not a
+      bit-exact copy of the whole simulation.</p>
+  </section>
+
+  <section>
+    <h2>What it costs to run</h2>
+    <p>The load-bearing question for any authoritative design is whether you can afford to run the
+      simulation for everyone at once. Measured with <code>npm run bench</code>, which runs the game
+      headless with an injected clock &mdash; exactly as the server will.</p>
     <div class="scroll">
       <table>
-        <thead>
-          <tr><th>Seam</th><th>Where</th><th>Why it matters</th></tr>
-        </thead>
+        <thead><tr><th>Tick rate</th><th>Cost per tick</th><th>Real-time factor</th><th>Simulations per core</th></tr></thead>
         <tbody>
-          <tr><td>One file knows about storage</td><td><code>ui/storage.ts</code></td><td>Swapping <code>localStorage</code> for HTTP touches nothing in the simulation.</td></tr>
-          <tr><td>The save is a plain object</td><td><code>state.ts</code> &rarr; <code>serialize()</code></td><td>The wire format already exists. You don't have to invent one.</td></tr>
-          <tr><td>The decoder rejects what it doesn't recognize</td><td><code>save.ts</code> &rarr; <code>readSave()</code></td><td>Already a server-grade validator, field by field, with bounds. Lift it verbatim.</td></tr>
-          <tr><td>The clock is injected</td><td><code>SimulationDependencies</code></td><td>The server can hand the simulation its own time instead of the device's.</td></tr>
-          <tr><td>Randomness is injected</td><td><code>rngFactory</code></td><td>Any server-side roll is reproducible from a seed you store.</td></tr>
-          <tr><td>The offline ledger is pure</td><td><code>offline.ts</code> &rarr; <code>runOfflineLedger()</code></td><td>No DOM, no clock of its own. It runs on a server today, unmodified.</td></tr>
-          <tr><td>The world is a seed</td><td><code>world.ts</code> &rarr; <code>World</code></td><td>The server stores one integer, not a map.</td></tr>
-          <tr><td>Apex schedules are wall-clock</td><td><code>content.ts</code> &rarr; <code>bossWindow()</code></td><td>Every client already agrees when an apex walks. The server records who turned up, not when.</td></tr>
+          <tr><td class="num">10 Hz</td><td class="num">0.046 ms</td><td class="num">2,194&times;</td><td class="num">~2,190</td></tr>
+          <tr class="pick"><td class="num">20 Hz</td><td class="num">0.037 ms</td><td class="num">1,358&times;</td><td class="num">~1,360</td></tr>
+          <tr><td class="num">30 Hz</td><td class="num">0.036 ms</td><td class="num">923&times;</td><td class="num">~920</td></tr>
+          <tr><td class="num">60 Hz</td><td class="num">0.036 ms</td><td class="num">466&times;</td><td class="num">~470</td></tr>
         </tbody>
       </table>
     </div>
-  </section>
-
-  <section>
-    <h2>Why the live simulation stays on the client</h2>
-    <div class="callout">
-      <span class="label">The constraint everything else routes around</span>
-      <p>The moment-to-moment combat simulation is <b>not replayable</b>, and can't be made
-        authoritative without a rewrite.</p>
+    <p>Each run is ten simulated minutes of auto-battle that actually fights &mdash; 150 to 177
+      kills, level 9 to 11 by the end. Cost per tick is flat across rates because it's dominated by
+      iterating roughly 120 beasts across 52 spawn nodes, so tick rate trades straight against
+      capacity.</p>
+    <div class="callout good">
+      <span class="label">The decision this settles</span>
+      <p><b>20&nbsp;Hz.</b> Four times the fastest attack interval in the game, 0.74&nbsp;ms of CPU
+        per simulated second, an order of magnitude of headroom. Treat the figures as an upper bound
+        &mdash; single-threaded, one machine, no network I/O or serialization. Budget a tenth of it
+        and one eight-core box still carries a four-figure concurrent player count.
+        <b>Authority is affordable here</b>, because Wildmarch's world is small, per-player, and
+        resolved by rules rather than physics.</p>
     </div>
-    <ul>
-      <li><b>One RNG stream serves everything.</b> The same sequence feeds combat damage, loot rolls,
-        float-text offsets, corpse lean, and beast wander points. Cosmetic draws and consequential
-        draws advance the same stream, so any difference in what got drawn changes what drops.</li>
-      <li><b>Frame timing feeds the simulation.</b> The frame loop quantizes the real delta and passes
-        it to <code>update()</code>. A 60&nbsp;Hz client and a 144&nbsp;Hz client take different
-        numbers of steps, and so make different numbers of <code>rand()</code> calls.</li>
-      <li><b>The view rectangle reaches the simulation.</b> Anything that varies with window size
-        can't be reproduced from inputs alone.</li>
-    </ul>
-    <p>Fixing that means separating cosmetic randomness from consequential randomness, moving to a
-      fixed timestep, and removing the view from the simulation's inputs. That's a real project, and
-      it buys a property this game doesn't need. So the server is designed never to need it.</p>
   </section>
 
   <section>
-    <h2>The trust model: verify, don't simulate</h2>
-    <p>The server doesn't re-run combat. It checks that the save a client hands back could have come
-      from an honest game.</p>
+    <h2>The architecture</h2>
+    <p>One simulation instance per active session. No shared entity space, no interest management
+      across players, no cross-session anything.</p>
+<pre><code>client                          server
+------                          ------
+input  ──── seq, dt, move ────▶  session
+                                   │
+render ◀─── snapshot deltas ────  simulation <span class="a">(20 Hz, authoritative)</span>
+  │                                │
+  └─ movement predictor            └─ save / hibernate ──▶ Postgres
+     <span class="c">(shared collision code)</span></code></pre>
+
+    <h3>Three tiers of authority</h3>
+    <p>An idle game can't keep a live simulation running for everyone forever &mdash; most players
+      are away most of the time, and simulating an empty room is pure cost. Authority degrades in
+      tiers, and the measurements above set the boundaries.</p>
     <div class="tiers">
 
       <article class="tier t1">
-        <span class="n">TIER 1</span>
-        <h3>Exact invariants</h3>
-        <div class="body">
-          <p>Closed-form facts about a legal save. Any violation is proof, not a signal.</p>
-          <ul>
-            <li><b>Items match their generator.</b> <code>makeItem()</code> is nearly deterministic
-              given base, item level, and rarity. Value and base damage are exact expressions.</li>
-            <li><b>Experience matches level.</b> <code>xpNext</code> must equal
-              <code>xpForLevel(level)</code>, and <code>xp</code> must be below it.</li>
-            <li><b>Talents match level.</b> One pick per unlocked row, never two from one row.</li>
-            <li><b>Milestones match counters.</b> A claimed milestone's threshold must actually be met.</li>
-            <li><b>Apex kills match the clock.</b> No stored boss window may exceed the server's
-              current one &mdash; a tight bound on the largest single reward in the game.</li>
-          </ul>
-        </div>
-        <p class="verdict">Ships as a hard rejection.</p>
+        <span class="n">LIVE</span>
+        <h3>Connected</h3>
+        <div class="body"><p>The real simulation at 20&nbsp;Hz, fully authoritative.</p></div>
+        <p class="verdict">0.74 ms of CPU per second, per player.</p>
       </article>
 
       <article class="tier t2">
-        <span class="n">TIER 2</span>
-        <h3>Rate ceilings</h3>
+        <span class="n">CATCH-UP</span>
+        <h3>Reconnect within 15 minutes</h3>
         <div class="body">
-          <p><code>killsPerHour()</code> already computes how fast a build kills a species. Reuse it
-            as a cheat oracle: derive stats from the previously stored save, compute the best rate
-            that build could reach, multiply by elapsed wall-clock seconds, add headroom.</p>
-          <p>The ledger discounts by <code>OFFLINE.efficiency</code> (0.72) for healing, pathing, and
-            respawn waits. Live play beats that, so start headroom near 3&times; and tune it against
-            real data.</p>
+          <p>Fast-forward the real simulation. A dropped connection on a train shouldn't hand you a
+            different outcome than staying online, and at 1,358&times; real time, replaying fifteen
+            minutes costs two thirds of a second.</p>
         </div>
-        <p class="verdict">Ships in shadow mode. Record, don't reject.</p>
+        <p class="verdict">0.66 s of CPU, once. This tier is what the measurements unlocked.</p>
       </article>
 
       <article class="tier t3">
-        <span class="n">TIER 3</span>
-        <h3>The clock</h3>
+        <span class="n">LEDGER</span>
+        <h3>Longer absences, capped at 12 hours</h3>
         <div class="body">
-          <p>The server stamps <code>savedAt</code> itself and ignores the client's. That one change
-            makes the offline ledger honest, because the ledger is a pure function of elapsed time
-            and the client no longer gets a vote on elapsed time.</p>
+          <p><code>runOfflineLedger()</code>, the existing rate model. Replaying twelve real hours
+            would cost 32 seconds of CPU, and nobody is watching closely enough to justify it.</p>
         </div>
-        <p class="verdict">One line of authority, most of the benefit.</p>
+        <p class="verdict">Microseconds &mdash; but see the next section.</p>
       </article>
 
     </div>
   </section>
 
   <section>
-    <h2>The item check, measured</h2>
-    <p>Tier 1's item check is the load-bearing claim of this design, so it exists in code rather than
-      in prose. <code>game/verify.ts</code> reconstructs the loot generator's expressions, and
-      <code>tests/unit/verify.test.ts</code> runs it against thousands of generated items plus a set
-      of tampered ones.</p>
-    <div class="figures">
-      <div class="figure"><span class="v">3,600</span><span class="l">Generated items accepted, across every rarity and 60 item levels</span></div>
-      <div class="figure"><span class="v">0</span><span class="l">False rejections of honest gear</span></div>
-      <div class="figure"><span class="v">exact</span><span class="l">Damage, armour, and value lines &mdash; any edit is caught</span></div>
-      <div class="figure"><span class="v">2.3&times;</span><span class="l">Worst-case affix inflation before detection; 1.3&times; on average</span></div>
-    </div>
-    <p>Affix magnitudes are the only soft spot, because they're the one part the generator rolls
-      rather than derives. A cheater's entire remaining budget is a fraction of one affix line on one
-      item &mdash; not worth their trouble or yours. Hand-edited gear, the dominant attack on a game
-      like this, is detectable without simulating anything.</p>
-  </section>
-
-  <section>
-    <h2>Stack and layout</h2>
-    <p><b>TypeScript on both sides, with the simulation shared as a package.</b> This isn't a
-      preference, it's a constraint: the tuning tables run to 1,551 lines, and the server's ledger has
-      to produce the same numbers as the client's estimate, forever. Any second implementation drifts,
-      and every drift is a payout bug. The game code is already pure TypeScript with no runtime
-      dependencies, so lifting it costs almost nothing.</p>
-<pre><code>packages/
-  sim/      <span class="c">// today's src/game and src/core, unchanged</span>
-  client/   <span class="c">// today's src/render, src/ui, src/main, src/assets</span>
-  server/   <span class="c">// new</span></code></pre>
-    <ul>
-      <li><b>Runtime:</b> Node with Fastify. Small, fast, doesn't argue about TypeScript.</li>
-      <li><b>Database:</b> Postgres. The save is a JSON document, but accounts, audit trail, and
-        ladders are relational and you'll want real queries over them.</li>
-      <li><b>Sessions:</b> an opaque refresh token in <code>localStorage</code>, short-lived access
-        tokens on requests. No cookies, so the client stays a static bundle you can host anywhere.</li>
-    </ul>
-  </section>
-
-  <section>
-    <h2>Data model</h2>
-<pre><code><span class="k">account</span>(id, created_at, email <span class="c">-- null until the player links one</span>, email_verified)
-
-<span class="k">credential</span>(account_id, kind <span class="c">-- 'device' | 'email' | 'oauth'</span>, secret_hash, last_used_at)
-
-<span class="k">character</span>(
-  id, account_id,
-  world_seed,         <span class="c">-- currently the constant 20260812</span>
-  save jsonb,         <span class="c">-- exactly what serialize() produces</span>
-  save_version, content_hash,
-  server_saved_at,    <span class="c">-- the server's clock, the only one that counts</span>
-  settled_at,         <span class="c">-- last time the ledger ran</span>
-  revision            <span class="c">-- increments on every accepted write</span>
-)
-
-<span class="k">ledger_run</span>(character_id, credited_seconds, kills, xp, gold, capped, created_at)
-
-<span class="k">anomaly</span>(character_id, tier, kind, observed jsonb, allowed jsonb, created_at)</code></pre>
-    <p>The last two are the audit trail. You'll want <code>ledger_run</code> the first time someone
-      reports lost progress, and <code>anomaly</code> is how you tune Tier 2 before it rejects
-      anything.</p>
-  </section>
-
-  <section>
-    <h2>API surface</h2>
-    <p>Small on purpose. The client stays a simulation that occasionally syncs.</p>
+    <h2>The gap between the ledger and the game</h2>
+    <p><code>OFFLINE.efficiency</code> is 0.72 and states the intent plainly: an hour away should be
+      worth about 0.72 of an hour played, the discount covering healing, pathing, and waiting on
+      respawns. <b>Measured, it pays about half that, and the shortfall is stable.</b></p>
     <div class="scroll">
       <table>
-        <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+        <thead><tr><th>Character</th><th>Live kills</th><th>Ledger kills</th><th>Ratio</th></tr></thead>
         <tbody>
-          <tr><td class="verb">POST</td><td><code>/v1/session</code></td><td>Create an anonymous account and character, or refresh a token. Returns the character and the offline report.</td></tr>
-          <tr><td class="verb">POST</td><td><code>/v1/session/link</code></td><td>Attach an email or OAuth identity to an existing anonymous account.</td></tr>
-          <tr><td class="verb">GET</td><td><code>/v1/character</code></td><td>Fetch the save, with the ledger already settled against the server clock.</td></tr>
-          <tr><td class="verb">PUT</td><td><code>/v1/character</code></td><td>Upload a save. Requires the revision you last read.</td></tr>
-          <tr><td class="verb">GET</td><td><code>/v1/ladder/:metric</code></td><td>Ranked characters by level, kills, or apex clears. Phase 4.</td></tr>
-          <tr><td class="verb">GET</td><td><code>/v1/world/bosses</code></td><td>The current window, and who has cleared each apex in it. Phase 4.</td></tr>
+          <tr><td>Level 4, Greenwood Vale</td><td class="num">1,787</td><td class="num">884</td><td class="num">0.49&times;</td></tr>
+          <tr><td>Level 11, Greenwood Vale</td><td class="num">1,917</td><td class="num">968</td><td class="num">0.50&times;</td></tr>
+          <tr><td>Level 18, Wolfden Thicket</td><td class="num">1,982</td><td class="num">1,006</td><td class="num">0.51&times;</td></tr>
         </tbody>
       </table>
     </div>
+    <p>Gold is worse and noisier &mdash; 0.16&times; to 0.27&times; &mdash; and experience worse
+      still, though both are confounded: auto-battle roams by quest objective rather than by the
+      assigned ground, so the live character drifts into richer regions and outlevels the one the
+      ledger holds in place. The kills column is the trustworthy one, and 0.49 / 0.50 / 0.51 across
+      three levels and two regions is too consistent to be roaming noise.</p>
+    <p>This is a live bug in the shipped game, not something the server introduces. It gets sharper
+      under this design for two reasons:</p>
     <ul>
-      <li><b>Every upload carries the revision you read.</b> A stale revision means another device
-        wrote first. Return 409 with the winning save and let the client re-hydrate. Never merge two
-        saves &mdash; merging item bags silently duplicates gear.</li>
-      <li><b>The body cap is 64&nbsp;KB.</b> A legal save is bounded: 40 bag slots, 6 equipment slots,
-        and a fixed set of id arrays. It can't legitimately grow past a few kilobytes.</li>
+      <li><b>The ledger becomes definitive.</b> Today it's an estimate a client applies to itself.
+        Afterwards it's the server's account of your night.</li>
+      <li><b>The tier boundary becomes visible.</b> If catch-up pays full rate and the ledger pays
+        half, the payout halves at the fifteen-minute mark. Players find cliffs like that in about a
+        day, and the optimal play becomes reconnecting every fourteen minutes.</li>
+    </ul>
+    <p><code>tests/unit/ledger-agreement.test.ts</code> gates this. It's a characterization test: it
+      asserts where the ratio sits today rather than where it should sit, because closing the gap is
+      a balance decision &mdash; raise the ledger's rate, or accept a lower number as the real
+      intent. Both sides are fully deterministic, so any movement in that test is a real change in
+      the model. <b>Fix it before Phase&nbsp;3 ships</b>, when the ledger stops being advisory.</p>
+  </section>
+
+  <section>
+    <h2>The rewrite</h2>
+    <p>Eight items, ordered by dependency, each independently reviewable.</p>
+    <div class="items">
+
+      <article class="item">
+        <span class="tag">R1</span>
+        <h3>Fixed timestep</h3>
+        <div class="body">
+          <p>The simulation steps at exactly 20&nbsp;Hz. The client accumulates real time into fixed
+            steps and renders with the leftover as an interpolation factor. This <b>deletes</b> the
+            <code>quantise()</code> median filter in <code>main.ts</code> &mdash; its sampling buffer
+            and period estimation exist solely to stabilize a variable frame delta.</p>
+        </div>
+      </article>
+
+      <article class="item">
+        <span class="tag">R2</span>
+        <h3>Split the randomness by consequence</h3>
+        <div class="body">
+          <p>One stream currently serves both dice that matter and dice that don't. Damage variance,
+            crit rolls, loot, rarity, AI transitions, wander points, and respawn jitter share a
+            sequence with float-text offsets, corpse lean, effect angles, and spark positions.</p>
+          <p>Split into <b>sim</b> (outcome-changing, server-only, position saved so a session
+            resumes mid-stream) and <b>fx</b> (only ever seen, client-only). Roughly 25 call sites,
+            each a one-line classification. The most invasive item and the most mechanical &mdash;
+            and once cosmetic draws stop perturbing the loot stream, the simulation becomes
+            replayable for debugging.</p>
+        </div>
+      </article>
+
+      <article class="item">
+        <span class="tag">R3</span>
+        <h3>Take the view out of the simulation</h3>
+        <div class="body">
+          <p><code>setView()</code> feeds the camera rectangle into the simulation, and exactly one
+            rule reads it: <code>shouldGiveUp()</code>, which ends a chase when a beast is dragged
+            off the visible screen. That's a fairness bug independent of any server &mdash; an
+            ultrawide monitor currently gets longer chases than a phone. Replace it with a fixed
+            leash in world units.</p>
+        </div>
+      </article>
+
+      <article class="item">
+        <span class="tag">R4</span>
+        <h3>Separate simulation state from wire state</h3>
+        <div class="body">
+          <p><code>Enemy</code> has 35 fields, most of them server-side AI bookkeeping the client
+            never draws. Serialized naively that's <b>582 bytes per beast</b>, and a full snapshot of
+            122 beasts is <b>71&nbsp;KB</b> &mdash; 1.4&nbsp;MB/s per player at 20&nbsp;Hz.</p>
+          <p>Define an <code>EnemyView</code> of about twelve fields, quantized to roughly a dozen
+            bytes, scoped to an interest radius, sent as deltas at 10&nbsp;Hz. Thirty visible beasts
+            then costs about 3.6&nbsp;KB/s. <b>The wire format is the real bottleneck in this design,
+            not the simulation.</b></p>
+        </div>
+      </article>
+
+      <article class="item">
+        <span class="tag">R5</span>
+        <h3>Make the simulation host-agnostic</h3>
+        <div class="body">
+          <p>Mostly already true. What remains is removing the last assumptions that a renderer is
+            present, and moving the simulation and core into a package both sides import.</p>
+        </div>
+      </article>
+
+      <article class="item">
+        <span class="tag">R6</span>
+        <h3>Transport and session lifecycle</h3>
+        <div class="body">
+          <p>WebSocket. The client sends batched input frames stamped with a sequence number; the
+            server replies with snapshot deltas and the last sequence it processed. Session states
+            are connecting, live, draining, hibernated.</p>
+        </div>
+      </article>
+
+      <article class="item">
+        <span class="tag">R7</span>
+        <h3>Client-side prediction, movement only</h3>
+        <div class="body">
+          <p>Extract position integration and terrain collision into a module both sides call. The
+            client keeps a ring buffer of unacknowledged inputs and replays them when the server
+            acknowledges a sequence with an authoritative position.</p>
+          <p>Abilities are optimistic: the button lights, the cooldown starts, the server confirms or
+            rejects. Damage numbers appear only when the server says so &mdash; fine, because you
+            aren't aiming.</p>
+        </div>
+      </article>
+
+      <article class="item">
+        <span class="tag">R8</span>
+        <h3>Reconcile the ledger with the simulation</h3>
+        <div class="body">
+          <p>The measured gap above. Listed here because it's a shipping requirement, not a
+            nice-to-have.</p>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>What survives from the client-authoritative plan</h2>
+    <ul>
+      <li><b><code>readSave()</code> stays.</b> Still the decoder for anything arriving from outside
+        &mdash; and under authority, the outside includes existing <code>localStorage</code> saves
+        being imported.</li>
+      <li><b><code>verify.ts</code> stays, retargeted.</b> The server generates every item, so
+        nothing needs verifying for anti-cheat. Two uses remain: validating imported saves at
+        migration, and asserting internal invariants in tests, where it catches server bugs rather
+        than cheaters. Its 19 tests keep earning their place.</li>
+      <li><b>The wall-clock apex schedule stays.</b> <code>bossWindow()</code> needs no server to
+        agree across clients, and now the server can record who turned up.</li>
+      <li><b>The data model stays</b>, minus the anomaly table. Keep <code>ledger_run</code> for
+        support questions.</li>
     </ul>
   </section>
 
   <section>
     <h2>The build order</h2>
-    <p>Each phase ships on its own and is worth having even if the next one never lands.</p>
+    <p>Each phase ships alone and is worth having if the next never lands.</p>
     <div class="phases">
 
       <article class="phase">
         <span class="num">0</span>
         <div class="content">
           <h3>Extract the shared package</h3>
-          <p>Move the simulation and core into <code>packages/sim</code> and have the client import
-            from it. No server, no behavior change. Do this first and alone &mdash; it's the only step
-            that touches the whole tree, and doing it alongside a new server means every failure has
-            two possible causes.</p>
-          <p class="done"><b>Done when</b> <code>npm run verify</code> passes and nothing under
-            <code>packages/sim</code> imports from <code>packages/client</code>.</p>
+          <p>Move the simulation and core into <code>packages/sim</code>; the client imports from it.
+            No server, no behavior change.</p>
+          <p class="done"><b>Done when</b> <code>npm run verify</code> passes and nothing in
+            <code>packages/sim</code> imports from the client.</p>
         </div>
       </article>
 
       <article class="phase">
         <span class="num">1</span>
         <div class="content">
-          <h3>Accounts and cloud saves</h3>
-          <p>Anonymous account on first launch. <code>storage.ts</code> gains a remote implementation
-            behind the same three functions it already exports, keeping the local save as a
-            write-through cache &mdash; an idle game that white-screens on a dropped connection is
-            worse than one with no server at all.</p>
-          <p class="done"><b>Done when</b> you can level a character in one browser, open another, and
-            continue it.</p>
+          <h3>Make the simulation hostable</h3>
+          <p>R1 through R5, in order. Still no server &mdash; the game runs in the browser exactly as
+            it does now, on a fixed timestep, with split randomness, no view dependency, and a wire
+            type it doesn't yet use. This is the rewrite, and it lands with the game playable at
+            every step.</p>
+          <p class="done"><b>Done when</b> the browser game plays identically, <code>npm run
+            bench</code> still reports its capacity, and the simulation compiles with no reference to
+            <code>window</code> or a view rectangle.</p>
         </div>
       </article>
 
       <article class="phase">
         <span class="num">2</span>
         <div class="content">
-          <h3>The ledger moves to the server</h3>
-          <p>The server runs <code>runOfflineLedger()</code> against its own clock, applies the report,
-            and returns it for the client to display. <b>Remove the client-side call in the same
-            change</b> &mdash; two appliers means double credit, and double credit that only reproduces
-            after a real absence is a miserable bug to find.</p>
-          <p class="done"><b>Done when</b> setting your device clock forward a day earns you nothing.</p>
+          <h3>The server runs the simulation</h3>
+          <p>R6 and R7. Accounts, WebSocket sessions, one simulation per connection, prediction and
+            interpolation on the client. No offline handling yet: disconnect ends the session and the
+            character is saved where it stood.</p>
+          <p class="done"><b>Done when</b> you can play a full session with the simulation on the
+            server and movement still feels immediate.</p>
         </div>
       </article>
 
       <article class="phase">
         <span class="num">3</span>
         <div class="content">
-          <h3>Verification</h3>
-          <p>Tier 1 as a rejection, Tier 2 as a shadow-mode record. Watch the <code>anomaly</code>
-            table for a few weeks, tune the headroom, then decide whether Tier 2 rejects, clamps, or
-            just flags an account.</p>
-          <p class="done"><b>Done when</b> a save with hand-edited gear is rejected, and Tier 2's
-            false-positive rate is low enough to act on.</p>
+          <h3>Absence</h3>
+          <p>Hibernation, the catch-up tier, and the ledger tier. R8 ships here or before.</p>
+          <p class="done"><b>Done when</b> a fifteen-minute disconnect resumes exactly, a twelve-hour
+            one settles through the ledger, and the payout at the boundary doesn't jump.</p>
         </div>
       </article>
 
@@ -646,9 +713,8 @@
         <span class="num">4</span>
         <div class="content">
           <h3>The shared world</h3>
-          <p>Ladders, an apex kill feed, and the one the ledger was written for &mdash; ghosts. You
-            already know what another character killed last night and where, so you can show them
-            doing it without simulating anything.</p>
+          <p>Ladders, an apex kill feed, and ghosts &mdash; all readouts of state the server already
+            holds.</p>
           <p class="done"><b>Done when</b> the world feels inhabited without a single synchronized
             position.</p>
         </div>
@@ -659,47 +725,53 @@
 
   <section>
     <h2>Hazards</h2>
-    <p>Each is cheap to handle now and expensive to discover later.</p>
     <ul>
-      <li><b>Double-credited offline time.</b> Exactly one applier, always. Covered in Phase 2.</li>
-      <li><b>Item uid collisions.</b> <code>nextUid</code> is a per-save counter. Two devices that
-        diverge and later reconcile can hold two different items with the same uid &mdash; which is
-        why Phase 1 needs revision-checked writes before there's anything to cheat.</li>
-      <li><b>Content drift.</b> The decoder validates item bases, talents, and relics against the
-        content tables. A server on a different build can reject a legal save, or pay out differently.
-        Hash the tables at build time, store the hash with the save, and refuse to settle across a
-        mismatch &mdash; ask the client to reload instead.</li>
-      <li><b>The world seed is a constant.</b> Store it per character from day one anyway. Retrofitting
-        it once players exist means a migration over live saves.</li>
-      <li><b>The 12-hour cap and lazy settling.</b> Settling only on login is correct, but a ladder
-        reading stored values shows absent players frozen. Project pending accrual at read time rather
-        than ticking every character on a cron.</li>
-      <li><b>Sync failures must never interrupt play.</b> Storage errors are already swallowed for this
-        reason. The remote path needs the same discipline: a failed sync retries, it doesn't surface a
-        modal.</li>
+      <li><b>The tier boundary.</b> Catch-up and ledger must pay comparably or players will farm the
+        seam.</li>
+      <li><b>Hibernation must be atomic.</b> Serializing a character while a tick is in flight is how
+        duplicated loot happens. Drain, then snapshot, then stop.</li>
+      <li><b>The RNG split is easy to get subtly wrong.</b> A draw classified as cosmetic that
+        actually feeds an AI decision reintroduces the dependency. Review R2 call site by call site,
+        not file by file.</li>
+      <li><b>Interpolation and the 12-hour cap don't compose.</b> A client watching an interpolated
+        world after a rate-model settle will see beasts pop into place. Settle, then tick, then
+        stream.</li>
+      <li><b>Content drift between client and server.</b> Hash the content tables at build time and
+        refuse a session across a mismatch. Under authority this matters more, not less: the
+        client's renderer indexes into the same tables.</li>
+      <li><b>The world seed is a constant.</b> Store it per character from day one anyway.</li>
+      <li><b>Prediction divergence on terrain.</b> The predictor and the server must share collision
+        code exactly, or players rubber-band at walls &mdash; the one place where a small numerical
+        disagreement is visible.</li>
     </ul>
   </section>
 
   <section>
     <h2>Decisions needed</h2>
-    <p>These change the plan materially. Each has an assumed answer so work can start without them.</p>
     <div class="scroll">
       <table>
         <thead><tr><th>Decision</th><th>Assumed</th><th>If you disagree</th></tr></thead>
         <tbody>
-          <tr><td>How far does this go?</td><td>Through Phase 4, in order.</td><td>Stopping at Phase 2 removes the need for Tiers 1 and 2 entirely.</td></tr>
-          <tr><td>Sign-in</td><td>Anonymous device account, optional email link later.</td><td>Requiring email up front simplifies recovery and costs you players.</td></tr>
-          <tr><td>Hosting</td><td>One region, one Node process, managed Postgres.</td><td>Multi-region means the wall-clock apex schedule needs a defined authority for kill credit.</td></tr>
-          <tr><td>Characters per account</td><td>One, matching the current game.</td><td>Multiple is a schema-only change now and a migration later.</td></tr>
-          <tr><td>Cheating consequences</td><td>Flag and record. No bans, no rollbacks, at first.</td><td>Rejecting Tier 2 immediately costs honest players progress while the headroom is untuned.</td></tr>
+          <tr><td>Tick rate</td><td>20 Hz</td><td>10 Hz doubles capacity and coarsens the fastest attack interval; 30 Hz costs a third of capacity for little visible gain.</td></tr>
+          <tr><td>Catch-up window</td><td>15 minutes</td><td>Longer is affordable as a background job but widens the window where a stale client shows an old world.</td></tr>
+          <tr><td>Closing the ledger gap</td><td>Raise the ledger's rate to the intended 0.72</td><td>Lowering <code>OFFLINE.efficiency</code> to match reality is equally valid and cheaper, but makes idling meaningfully worse.</td></tr>
+          <tr><td>Sign-in</td><td>Anonymous device account, email link later</td><td>Requiring email up front simplifies recovery and costs you players.</td></tr>
+          <tr><td>Existing saves</td><td>Import once, validated by <code>verify.ts</code></td><td>Starting everyone fresh is simpler and throws away real characters.</td></tr>
+          <tr><td>Wire encoding</td><td>Binary, quantized, interest-scoped</td><td>JSON is simpler and costs roughly 40&times; the bandwidth.</td></tr>
         </tbody>
       </table>
     </div>
   </section>
 
+  <section>
+    <h2>Reproducing the measurements</h2>
+<pre><code>npm run bench     <span class="c"># capacity: ms per tick, sims per core, snapshot size</span>
+npm test          <span class="c"># includes tests/unit/ledger-agreement.test.ts</span></code></pre>
+  </section>
+
   <footer>
     <span>Wildmarch server backend design &middot; committed as <code>docs/design/server-backend.md</code></span>
-    <span>The Tier 1 spike lives at <code>src/game/verify.ts</code> with 19 tests in <code>tests/unit/verify.test.ts</code>.</span>
+    <span>Capacity benchmark at <code>tools/bench-sim.test.ts</code>; ledger gate at <code>tests/unit/ledger-agreement.test.ts</code>.</span>
   </footer>
 
 </div>

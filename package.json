@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
+    "bench": "vitest run --config vitest.bench.config.ts",
     "test:browser": "playwright test",
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:browser",
     "atlas:characters": "node tools/build-character-atlas.mjs"
