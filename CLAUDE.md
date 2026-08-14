@@ -1,14 +1,14 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file gives Claude Code (claude.ai/code) guidance for working in this repository.
 
-This file uses ASD-STE100 (Simplified Technical English). Write new text in the same
-style: one idea in each sentence, the active voice, short sentences, and simple words.
+The docs here follow the [Microsoft Writing Style Guide](https://learn.microsoft.com/style-guide/welcome/).
+Write new text the same way: talk to the reader as *you*, use active voice and contractions,
+lead with what matters, and keep sentences short enough to scan.
 
-Wildmarch is a vertical slice of an idle action RPG with a top-down view. The game draws
-to a canvas. Four PNG atlases in `public/assets/generated` hold the art, and the code cuts
-them into sheets at start-up. The game has one class (Warrior), six regions, and five
-species. The game keeps the save data on the local machine only.
+Wildmarch is a vertical slice of a top-down idle action RPG. It draws to a canvas, and its
+art comes from generated PNG atlases in `public/assets/generated`. There's one class
+(Warrior), six regions, and five species. Saves stay on the player's machine.
 
 ## Commands
 
@@ -16,28 +16,26 @@ species. The game keeps the save data on the local machine only.
 npm run dev           # Vite dev server on port 5173, open to the LAN and to mobile
 npm run typecheck     # tsc --noEmit
 npm run lint          # eslint
-npm test              # vitest, the unit tests
-npm run test:browser  # playwright, the smoke tests
+npm test              # vitest unit tests
+npm run test:browser  # playwright smoke tests
 npm run build         # typecheck, then a production bundle in dist/
 npm run preview       # serve dist/
 npm run verify        # all of the above, in order
-npm run atlas:measure # measure the atlases again and rewrite src/assets/frames.ts
+npm run atlas:measure # remeasure the atlases and rewrite src/assets/frames.ts
 npm run atlas:characters <spec.json>   # compose a character sheet from 8 strips
 ```
 
-The TypeScript configuration sets `strict`, `noUnusedLocals`, and `noUnusedParameters`.
-Thus an unused import stops the build. Run `npm run typecheck` before you report that the
-work is complete.
+TypeScript runs with `strict`, `noUnusedLocals`, and `noUnusedParameters`, so an unused
+import breaks the build. Run `npm run typecheck` before you report that you're done.
 
-The configuration also sets `verbatimModuleSyntax`. Thus an import of a type must use
-`import type`.
+`verbatimModuleSyntax` is on too, so import types with `import type`.
 
 ## How to verify a change
 
-Vitest holds the unit tests and Playwright holds the smoke tests. They are not sufficient.
-This is a game, and you can see much of its behaviour only in movement. Thus you must also
-verify each change in a real browser with the game in operation. The code puts the
-simulation, the renderer, and the command boundary on `window.__wildmarch` for this purpose.
+Vitest covers the units and Playwright covers the smoke tests, but neither is enough on its
+own. This is a game, and you can only see most of its behavior in motion, so check your
+change in a real browser with the game running. The simulation, the renderer, and the
+command boundary are all on `window.__wildmarch` for exactly this.
 
 Playwright is a dependency of this project. Import it from `node_modules`:
 
@@ -45,8 +43,7 @@ Playwright is a dependency of this project. Import it from `node_modules`:
 import { chromium } from '<repo>/node_modules/playwright/index.mjs'
 ```
 
-A good probe simulates the game and then reads the state. Do not make assertions about
-pixels.
+Write probes that drive the game and then read its state. Don't assert on pixels.
 
 ```js
 await page.keyboard.press('Space')          // start auto-battle
@@ -57,328 +54,314 @@ await page.evaluate(() => {
 })
 ```
 
-Collect `pageerror` and the console errors. Also make a screenshot of the result. You can
-see some defects only in an image: upside-down tents, a gold blob on top of an enemy, and a
-checkerboard pattern in the terrain. The state showed none of these three defects. Probe
-scripts and their screenshots are temporary. Write them outside the repository.
+Collect `pageerror` and console errors, and take a screenshot. Some defects only show up in
+an image — upside-down tents, a gold blob sitting on an enemy, a checkerboard in the
+terrain. State readouts missed all three. Probe scripts and their screenshots are throwaway,
+so write them outside the repository.
 
-The game keeps a save. Thus obey these three rules:
+The game saves, so three rules apply:
 
-- Clear the storage first. Call `localStorage.clear()`, then load the page again. If you do
-  not, a new character starts with the level from the last run.
-- Set an earlier date with `page.addInitScript(...)`, which runs before the game starts.
-  The `pagehide` event writes a save when the page closes. Thus a date that you set from
-  inside the page is lost when you load the page again to read it.
-- Let the game become quiet before you compare the state from before and after a page load.
-  The game keeps the auto-battle setting, and auto-battle starts again immediately. Stop
-  auto-battle and stand in a camp, because a camp makes each enemy stop its chase.
+- **Clear storage first.** Call `localStorage.clear()`, then reload. Otherwise a new
+  character starts at the level your last run reached.
+- **Set the date with `page.addInitScript(...)`**, which runs before the game starts. The
+  `pagehide` event writes a save on close, so a date you set from inside the page is gone
+  by the time you reload to read it.
+- **Let the game settle before you compare state across a reload.** The auto-battle setting
+  persists and restarts immediately. Turn auto-battle off and stand in a camp, because a
+  camp makes enemies break off their chase.
 
-## Rules that you must not break
+## Rules you shouldn't break
 
-Each rule below has a reason. If you change the code and you do not know the reason, the
-game breaks in a way that is difficult to find.
+Every rule here exists for a reason. Change the code without knowing the reason and the
+game breaks in ways that are hard to track down.
 
-### The sequence of the frame loop
+### Frame loop order
 
-`main.ts` uses this sequence: `input` → `game.update` → `renderer.updateCamera` →
-`game.setView` → `render`. You must simulate before you move the camera. If the camera
-follows a player position that is one frame old, the offset from the camera to the player
-changes with the frame time. The pixel snap then shows that change as jitter.
+`main.ts` runs `input` → `game.update` → `renderer.updateCamera` → `game.setView` →
+`render`. Simulate before you move the camera. If the camera chases a player position
+that's a frame old, the camera-to-player offset shifts with frame time, and the pixel snap
+turns that shift into jitter.
 
 ### The three snaps in the pixel pipeline
 
-The pixel pipeline snaps three times. Each snap has a different function. Keep all three.
+The pipeline snaps three times, and each snap does a different job. Keep all three.
 
-1. The code draws the world into a buffer with a low resolution. The origin of the buffer
-   is on a whole art pixel. This keeps the art sharp. It also stops the player from sliding
-   on the ground.
-2. The code blits the buffer with an integer scale from art pixels to device pixels. With a
-   fractional scale, adjacent art pixels cover different quantities of device pixels, and
-   the detail moves when the world scrolls.
-3. The code applies the fraction that snap 1 removed to the position of the blit, at the
-   resolution of the device. Thus slow movement scrolls smoothly. Without this snap, the
-   movement stops and then jumps.
+1. The world draws into a low-resolution buffer whose origin sits on a whole art pixel.
+   This keeps the art sharp and stops the player sliding along the ground.
+2. The buffer blits with an integer scale from art pixels to device pixels. At a fractional
+   scale, neighboring art pixels cover different numbers of device pixels, so detail
+   crawls as the world scrolls.
+3. The fraction that snap 1 removed goes back onto the blit position, at device resolution.
+   This is what makes slow movement scroll smoothly instead of stalling and jumping.
 
-`Renderer.resize` obeys these conditions:
+`Renderer.resize` has to hold to these:
 
-- It uses the true value of `devicePixelRatio`. Do not round that value down. Do not apply
-  a maximum limit to it.
-- It makes the backing store exactly `cssPx x dpr`.
-- It makes the buffer 2 art pixels larger than the screen needs. Thus the offset of the
-  blit cannot pull an empty edge into view.
-- It makes the width and the height of the buffer even numbers. With an odd width, the
-  origin of the view is on a half pixel, and `Math.round` changes direction with the
-  parity.
+- Use the true `devicePixelRatio`. Don't floor it and don't cap it.
+- Make the backing store exactly `cssPx × dpr`.
+- Make the buffer 2 art pixels bigger than the screen needs, so the blit offset can't pull
+  an empty edge into view.
+- Keep buffer width and height even. An odd width puts the view origin on a half pixel, and
+  `Math.round` then flips direction with the parity.
 
-`main.ts` snaps `dt` to a whole number of display frame periods for the same reason. A
-small error in `dt` changes the result of the rounding and scrolls the world one pixel too
-far.
+`main.ts` snaps `dt` to a whole number of display frame periods for the same reason. A small
+error in `dt` changes how things round and scrolls the world a pixel too far.
 
-### The camera locks on to the player
+### The camera locks to the player
 
-The camera must stay locked on to the player. Do not add easing. Easing leaves a gap of
-less than one pixel between the camera and the player. That gap changes in each frame, and
-it rounds first in one direction and then in the other direction. The player then slides
-against the ground. A measurement showed a movement of 15 px with changes of direction.
+Keep the camera locked. Don't add easing. Easing leaves a sub-pixel gap between camera and
+player that changes every frame and rounds first one way, then the other. The player slides
+against the ground as a result — a measurement caught 15 px of drift with direction changes.
 
-### A camp discovers once and answers a task each time
+### A camp discovers once but answers a task every time
 
-`Game.enterCamp` runs in each frame that the player stands in a camp. The discovery half
-runs one time. The `reach` task check runs each time, because a player can walk into a camp
-before anybody asks them to. If the check lived in the discovery half, that task could never
-finish, and the whole chain would stop behind it.
+`Game.enterCamp` runs on every frame the player stands in a camp. The discovery half runs
+once. The `reach` task check runs every time, because a player can wander into a camp before
+anyone asks them to. Move that check into the discovery half and the task can never
+complete, which stalls the whole chain behind it.
 
-### The HUD shows banners one at a time
+### The HUD shows one banner at a time
 
-Walking into a camp can find the place, finish a task, and take a level in the same frame.
-`UI.banner` puts each one in a queue and shows it for 2.6 seconds. Without the queue, the
-last banner is the only banner, and it is the least important of the three.
+Walking into a camp can discover the place, complete a task, and grant a level in the same
+frame. `UI.banner` queues each one and shows it for 2.6 seconds. Without the queue you only
+see the last banner, which is the least important of the three.
 
-### The rule that stops a chase is in three files
+### Three files decide when a chase ends
 
-`Renderer` calculates the view rectangle. `main.ts` sends that rectangle to `game.setView`.
-`Game.shouldGiveUp` then uses it. An enemy stops its chase in these four conditions:
+`Renderer` works out the view rectangle, `main.ts` passes it to `game.setView`, and
+`Game.shouldGiveUp` uses it. An enemy gives up when any of these is true:
 
-- The enemy goes out of the visible screen.
-- The enemy goes further from its spawn anchor than its leash permits.
-- The enemy falls more than 2.6 aggro ranges behind the player.
-- The player goes into a camp.
+- It leaves the visible screen.
+- It gets further from its spawn anchor than its leash allows.
+- It falls more than 2.6 aggro ranges behind the player.
+- The player enters a camp.
 
-This rule lets a player cross the map without a large group of enemies behind them. Verify
-the rule again after you change the enemy AI, the camera, or the sequence of the loop.
-`isEngaged` in `types.ts` lists the states that the rule controls. If you add a state and
-you do not put it in `isEngaged`, that enemy follows the player across the map.
+Together these let a player cross the map without towing a crowd. Recheck the rule whenever
+you change enemy AI, the camera, or loop order. `isEngaged` in `types.ts` lists the states
+the rule governs — add a state and forget to list it, and that enemy follows the player
+across the map.
 
 ### A kill has two halves
 
-`Game.killEnemy` is the half for the world. It makes the corpse, it makes the effect, and
-it gives the slot of the enemy back to its `SpawnNode`. Each enemy has a `nodeId`. If you
-do not remove the enemy from `node.alive` and set `node.respawnAt`, that node stops the
-supply of new enemies, and it gives no error.
+`Game.killEnemy` is the world half. It spawns the corpse and the effect and returns the
+enemy's slot to its `SpawnNode`. Every enemy carries a `nodeId`. Skip removing it from
+`node.alive` and setting `node.respawnAt`, and that node quietly stops producing enemies
+with no error to tell you.
 
-`Game.creditKill` is the half for the player. It moves the counters, it moves the quest
-progress, and it gives experience, gold, and drops at the correct scale.
+`Game.creditKill` is the player half. It moves counters and quest progress and pays out
+experience, gold, and drops at the right scale.
 
-Credit for a kill is universal, because each player who does damage to an enemy gets the
-full quantity. Thus the half for the world must run one time for each death. The half for
-the player must run one time for each contributor.
+Kill credit is universal — everyone who damaged an enemy gets full value. So the world half
+runs once per death, and the player half runs once per contributor.
 
-### Per-player data must not be in module scope
+### Keep per-player data out of module scope
 
-Two defects of this type are already corrected. The discovery of a camp changed the
-exported `CAMPS` array. `loot.ts` kept `nextUid` as a counter in module scope, which
-started again at 1 after a load and gave the same number as restored equipment.
+Two bugs of this kind are already fixed. Camp discovery used to mutate the exported `CAMPS`
+array, and `loot.ts` kept `nextUid` as a module-scope counter that restarted at 1 after a
+load and handed restored equipment duplicate IDs.
 
-This project moves towards a shared world. Thus data for one character belongs on `Game`
-and in the save. `CAMPS` and `REGIONS` stay as placement data that does not change.
+This project is heading toward a shared world, so per-character data belongs on `Game` and
+in the save. `CAMPS` and `REGIONS` stay put as placement data that never changes.
 
-### Data for each species is a record with an `EnemyKind` key
+### Species data is a record keyed by `EnemyKind`
 
-Do not add one field for each animal. `ENEMY_KINDS` in `types.ts` is the one list.
+Don't add a field per animal. `ENEMY_KINDS` in `types.ts` is the single list.
 `Counters.species`, `Mods.vs`, `Mods.from`, `OFFLINE.cleave`, and the milestone `Metric`
-(`slain:${EnemyKind}`) all come from that list. Thus a new species is one entry in a table,
-and the build shows you each other location that needs a change.
+(`slain:${EnemyKind}`) all derive from it. A new species is one table entry, and the build
+points you at every other place that needs updating.
 
-`NO_MODS` freezes its two records, and `baseMods()` copies them. A shallow spread gives
-each character the record from module scope.
+`NO_MODS` freezes its two records and `baseMods()` copies them. A shallow spread hands every
+character the module-scope record.
 
-### A species is a behaviour, not a set of statistics
+### A species is a behavior, not a stat block
 
-`EnemyType.behaviour` selects `stalk`, `charge`, `web`, or `flock`. `Game.stepEnemy`
-contains the code, and `BEHAVIOUR` contains the numbers. Each behaviour has a rule that
-keeps it fair:
+`EnemyType.behaviour` picks `stalk`, `charge`, `web`, or `flock`. `Game.stepEnemy` holds the
+code and `BEHAVIOUR` holds the numbers. Each behavior has a rule that keeps it fair:
 
-- A charge holds its heading and stops all steering. If it steered, it would be an attack
-  with more steps.
-- A web refreshes its duration. It does not add to it, because an increase of the duration
-  is a stun.
-- A flock has a cooldown for each bird before it scatters, and the scatter ignores burn
-  ticks. Without the cooldown, the player can kite the flock for an unlimited time. Without
-  the second condition, the player can move the flock with burning ground.
+- A charge holds its heading and stops steering. Let it steer and it's just a
+  multi-step attack.
+- A web refreshes its duration instead of adding to it, because stacking duration is a stun.
+- A flock gives each bird a cooldown before it scatters, and scattering ignores burn ticks.
+  Without the cooldown a player can kite the flock forever. Without the second rule they can
+  herd it with burning ground.
 
-### One `Mods` bag, one fold, one stacking rule for each field
+### One `Mods` bag, one fold, one stacking rule per field
 
-Talents, worn relics, and beast mastery each give a `ModsPatch`. `buildMods` folds them in
-a fixed sequence. `Game.computeMods` and `offline.ts` both use `buildMods`. Thus the live
-game and the ledger always agree about the rules for a character.
+Talents, worn relics, and beast mastery each contribute a `ModsPatch`, and `buildMods` folds
+them in a fixed order. `Game.computeMods` and `offline.ts` both call it, so the live game and
+the ledger always agree about a character.
 
-`COMBINE` in `content.ts` is a `Record<keyof Mods, ...>`. A new field on `Mods` must
-declare its stacking rule: multiply, add, OR, or fold for each species. If it does not, the
-build fails. It does not select a default rule that is incorrect.
+`COMBINE` in `content.ts` is a `Record<keyof Mods, ...>`. Every new field on `Mods` has to
+declare how it stacks: multiply, add, OR, or fold per species. Miss one and the build fails
+rather than picking a wrong default.
 
-`shouldGiveUp` limits `mods.leashMult` to 1 or less. Content can make a chase stop earlier.
-Content must not make a chase longer.
+`shouldGiveUp` clamps `mods.leashMult` to 1 or less. Content can end a chase sooner. It
+can't extend one.
 
-### Auto-equip ignores a relic in both directions
+### Auto-equip leaves relics alone, in both directions
 
-`itemScore` reduces equipment to one number. The full value of a unique item is a rule that
-this number cannot see. Thus `Game.addItem` sends each item with `Item.unique` to
-`stowUnique`. The code does not auto-equip a unique item, and it does not replace a unique
-item that the player wears.
+`itemScore` reduces gear to a single number, and a unique item's real value is a rule that
+number can't see. So `Game.addItem` routes anything with `Item.unique` to `stowUnique`.
+Auto-equip never equips a unique and never replaces one the player is wearing.
 
-A unique item has `value: 0` and you cannot sell it. `sellFromBag` guards this. There is one
-of each unique item, and `foundUniques` stops a second drop. Thus the auto-sell for a full
-bag would destroy this content permanently. A full bag makes space for a relic when it sells
-the worst ordinary item.
+A unique has `value: 0` and can't be sold, which `sellFromBag` enforces. There's exactly one
+of each, and `foundUniques` blocks a second drop — so auto-selling from a full bag would
+destroy that content permanently. A full bag makes room for a relic by selling the worst
+ordinary item instead.
 
-### A world boss follows a clock, not a respawn timer
+### World bosses run on a clock, not a respawn timer
 
-`bossWindow(now)` is a pure function of the wall time. Thus each client agrees about the
-time when an apex enemy walks. That agreement is the reason for the design.
-`Game.bossCleared` records the window that this character took, and the save keeps it. This
-stands in for the shared data that a server will hold later.
+`bossWindow(now)` is a pure function of wall time, so every client agrees on when an apex
+enemy walks. That agreement is the whole point of the design. `Game.bossCleared` records the
+window this character claimed, and the save keeps it — standing in for shared server state
+later.
 
-A boss has `nodeId: -1`. The `skipBosses` parameter of `Game.nearestEnemy` stops
-auto-battle from moving to a boss.
+A boss has `nodeId: -1`. The `skipBosses` parameter on `Game.nearestEnemy` keeps auto-battle
+from wandering into one.
 
 ### Mastery is a view, not a record
 
-`masteryTier` reads `Counters.species` directly. Thus the bestiary always agrees with the
-kill totals in the HUD. The cost of this design is that `recalc` must run when the kills go
-across a tier limit. `creditKill` samples the tier before the increment and after the
-increment. `applyOfflineReport` runs `recalc` one time at the end.
+`masteryTier` reads `Counters.species` directly, so the bestiary always matches the kill
+totals in the HUD. The cost is that `recalc` has to run when kills cross a tier boundary.
+`creditKill` samples the tier before and after each increment, and `applyOfflineReport` runs
+`recalc` once at the end.
 
-### A spawn node puts its elites first
+### Spawn nodes place elites first
 
-Elite enemies need the largest clear area. If the code puts them last, a full region has
-space only for ordinary dens. Wolfden Thicket once had zero alpha wolves. Thus it had no
-relics, but the offline ledger continued to pay for both.
+Elites need the largest clear area. Place them last and a busy region only has room for
+ordinary dens. Wolfden Thicket once ended up with zero alpha wolves, so it dropped no
+relics — while the offline ledger kept paying for both.
 
-### Two reward curves with two different functions
+### Two reward curves, two jobs
 
-`rewardScale` controls gold, the drop chance, and the item level of a drop. For an enemy
-below the player, its minimum is 15%. For an enemy above the player, its minimum is 4%.
-Thus it never becomes zero. `xpScale` controls experience only, and it becomes exactly zero
-at 8 levels below the player. Thus a player can outgrow a region.
+`rewardScale` drives gold, drop chance, and item level. It bottoms out at 15% for enemies
+below the player and 4% for enemies above, so it never reaches zero. `xpScale` drives
+experience only, and it hits exactly zero at 8 levels below the player, which is what lets a
+player outgrow a region.
 
-If you use `rewardScale` for experience, the player can grind in the first region for an
-unlimited time. If you use `xpScale` for loot, all drops stop. Neither curve changes kills,
-quests, counters, or milestones. The game always records a kill. Only the payment changes
-with the scale.
+Use `rewardScale` for experience and players can farm the first region forever. Use
+`xpScale` for loot and drops stop entirely. Neither curve touches kills, quests, counters, or
+milestones — a kill always counts, and only the payout scales.
 
-### Auto-battle works on the task
+### Auto-battle serves the current task
 
-Two decisions make a hunt serve the task. `Game.huntPlan` reads the task in hand and
+Two decisions make a hunt follow the task, and `Game.huntPlan` reads the active task and
 answers both.
 
-- `pickTarget` uses `want`, the species the task counts. Auto-battle crosses `AUTO.taskSeek`
-  for that species and only `AUTO.straySeek` for anything else. A character that answers
-  each beast inside the full range drifts off the den it was sent to, one detour at a time.
-- `roam` uses `autoGoal`. With a task in hand it walks to that task's work, not to the
-  nearest den. Thus a task to reach a camp finishes with no help, and the task after it
-  starts the walk again.
+- `pickTarget` uses `want`, the species the task counts. Auto-battle ranges out to
+  `AUTO.taskSeek` for that species and only `AUTO.straySeek` for anything else. A character
+  that answers every beast at full range drifts off its assigned den one detour at a time.
+- `roam` uses `autoGoal`. With a task in hand it walks toward that task's objective rather
+  than the nearest den, so a "reach a camp" task completes unaided and the next one starts
+  the walk again.
 
 `focused` shortens the leash whenever the task has somewhere to be. A body count (`any`)
-takes each beast, thus it narrows nothing. A task that is only on offer counts for neither
-decision, because a conversation takes it and standing beside the giver would stop the hunt.
-An apex counts for neither either, for the same reason `skipBosses` exists.
+takes every beast, so it narrows nothing. A task that's merely on offer counts for neither
+decision, because taking it requires a conversation and standing next to the giver would
+stall the hunt. An apex counts for neither either — same reason `skipBosses` exists.
 
-The rule is a preference and not a blindfold. Each beast that comes close is still fair
-game, and each beast in reach still gets the swing.
+The rule is a preference, not a blindfold. Any beast that comes close is still fair game, and
+anything in reach still gets the swing.
 
-### Travel walks a route; it does not chase
+### Travel walks a route; it doesn't chase
 
-`Game.travel` holds one destination, and `Game.travelTo` starts the walk. Auto-battle then
-walks the route and chases nothing. `stepSwing` still answers each beast that comes within
-reach, thus a walk through a pack costs the pack blood.
+`Game.travel` holds one destination and `Game.travelTo` starts the walk. Auto-battle then
+follows the route and chases nothing, though `stepSwing` still answers anything that comes
+within reach — so walking through a pack costs the pack blood.
 
-`World.findPath` gives the route. It is A* across the 32 px tile grid, because a straight
-walk sticks: `moveEntity` slides along the free axis, and a bay in a lake holds the player
-against the shore. The first search keeps one tile of clearance from the water, because the
-collision box is padded. A search with no route tries again without that clearance.
+`World.findPath` supplies the route as A* over the 32 px tile grid, because walking straight
+gets stuck: `moveEntity` slides along the free axis, and a bay in a lake pins the player
+against the shore. The first search keeps a tile of clearance from water, since the collision
+box is padded; if that finds nothing, it retries without the clearance.
 
-`Game.stepRoute` walks one step of a `Route`, and travel and roaming both go through it.
-Thus a walk the player asked for and a walk auto-battle chose move the same way. It returns
-false when the walker has gone nowhere for more than a second, and the caller draws the
-route again. Roaming throttles that with `roamRetry`, because a place with no route costs a
-search of the whole map to find out.
+`Game.stepRoute` advances a `Route` by one step, and both travel and roaming go through it,
+so a walk the player asked for and a walk auto-battle chose move identically. It returns
+false when the walker hasn't moved for over a second, and the caller replots. Roaming
+throttles that with `roamRetry`, because a place with no route costs a whole-map search to
+discover.
 
-A journey ends in one of five ways: it arrives, the player takes the stick, the player stops
-auto-battle, the player dies, or the task that it serves ends. `Game.endTravel` takes one
-flag: whether the journey ended at the place it was going. Only that case obeys
-`TravelTarget.stopHere`, which switches auto-battle off. Use `stopHere` for a person and for
-a camp, because the player arrives to read something. Do not use it for a den, because the
-beasts there are the point.
+A journey ends in one of five ways: it arrives, the player grabs the stick, the player stops
+auto-battle, the player dies, or the task it serves ends. `Game.endTravel` takes one flag —
+whether the journey ended where it was headed. Only that case honors
+`TravelTarget.stopHere`, which switches auto-battle off. Use `stopHere` for people and camps,
+where the player arrives to read something. Don't use it for a den, where the beasts are the
+point.
 
-The end of a task counts as arriving. A camp is discovered at its full radius, which is
-outside the radius the journey aims for, thus the task finishes first and ends the journey.
-If that counted as a cancellation, auto-battle would march back out of the camp before the
-player had read the banner.
+Finishing a task counts as arriving. A camp is discovered at its full radius, which sits
+outside the radius the journey aims for, so the task completes first and ends the journey.
+Treat that as a cancellation and auto-battle marches back out of the camp before the player
+has read the banner.
 
-`Game.questDestination` turns a task into a destination. The tracker and the Tasks panel
-both call it. Do not calculate a destination in the HUD.
+`Game.questDestination` turns a task into a destination, and both the tracker and the Tasks
+panel call it. Don't work out a destination in the HUD.
 
-### A task that a person gives waits until the player takes it
+### A task from a person waits until the player takes it
 
-`QuestDef.from` holds an id in `NPCS`. With one, the task sits unstarted until the player
-stands beside that person and takes it. Without one, the task starts by itself when the
-task before it ends.
+`QuestDef.from` holds an ID in `NPCS`. With one, the task sits unstarted until the player
+stands next to that person and accepts it. Without one, it starts on its own when the
+previous task ends.
 
-`Game.quest` is the one place that decides this. It returns null while the task is only on
-offer, and `Game.offeredQuest` returns the task instead. Thus the three paths that credit
-progress (`advanceQuestOnKill`, `discoverCamp`, and `applyOfflineReport`) all stop through
-one getter. Do not add a fourth path that reads `QUESTS[this.questIndex]` directly.
+`Game.quest` is the only place that decides this. It returns null while a task is merely on
+offer, and `Game.offeredQuest` returns the task instead. All three paths that credit progress
+— `advanceQuestOnKill`, `discoverCamp`, and `applyOfflineReport` — funnel through that one
+getter. Don't add a fourth path that reads `QUESTS[this.questIndex]` directly.
 
-`Game.questTaken` is per-player progress, and the save holds it. A save from version 5
-migrates to `true`, because no person handed a task out in that world.
+`Game.questTaken` is per-player progress and lives in the save. A version 5 save migrates to
+`true`, because nobody handed out tasks in that world.
 
-An NPC stands still and has one pose. `Renderer.drawNpc` draws it, the name, and the gold
-mark that says a task is on offer. The mark bobs, because a still figure among still props
-is easy to walk past.
+An NPC stands still in a single pose. `Renderer.drawNpc` draws the figure, the name, and the
+gold mark that signals an offer. The mark bobs, because a motionless figure among motionless
+props is easy to walk past.
 
 ### The save migrates forward
 
-`save.ts` is at version 6. `readSave` does the structural check and each migration in one
-pass. The code discards a save from a different seed, because each camp and each den would
-be in a different location. The code fills an older schema version with default values.
-Keep each addition additive, and each new version stays a change of two lines.
+`save.ts` is at version 6. `readSave` does the structural check and every migration in one
+pass. A save from a different seed is discarded, because every camp and den would be
+somewhere else. An older schema version gets filled in with defaults. Keep additions
+additive, and each new version stays a two-line change.
 
-### The save does not contain the world
+### The save doesn't contain the world
 
-Terrain, props, and the position of each spawn are pure functions of the seed. The `Game`
-constructor fills each node at start-up. Thus `hydrate` runs on a world that is already
-complete, and it restores only the character.
+Terrain, props, and spawn positions are pure functions of the seed, and the `Game`
+constructor fills every node at startup. So `hydrate` runs against a world that's already
+complete and restores only the character.
 
-`hydrate` also gives a new seed to `this.rand`. The loot stream has a fixed seed and no
-position that the code can recover. Without the new seed, each session rolls the same drops
-from the start of the stream.
+`hydrate` also reseeds `this.rand`. The loot stream has a fixed seed and no recoverable
+position, so without reseeding every session rolls the same drops from the start.
 
 ### The offline ledger runs in buckets
 
-Rewards change with the level. Thus `offline.ts` steps in slices of ten minutes and
-calculates the statistics again between the slices. If you make it a single pass, a
-character that stays away all night earns at its start level all night.
+Rewards scale with level, so `offline.ts` steps in ten-minute slices and recomputes stats
+between them. Make it a single pass and a character who's away all night earns at their
+starting level all night.
 
-### One function samples the terrain at two resolutions
+### One function samples terrain at two resolutions
 
-`World.sampleTile(wx, wy)` is the source of truth. The game logic and the collision use
-`tileAt(tx, ty)` on the grid of 32 px. That path has a cache, and `isSolidTile` blocks water
-only. The renderer calls `sampleTile` directly at each 8 px, thus the edges of a biome
-follow the noise and not the tile grid. A change to the terrain rules changes both paths.
-`sampleTile` runs thousands of times for each chunk bake, thus keep it fast.
+`World.sampleTile(wx, wy)` is the source of truth. Game logic and collision go through
+`tileAt(tx, ty)` on the 32 px grid — that path is cached, and `isSolidTile` blocks water
+only. The renderer calls `sampleTile` directly every 8 px, so biome edges follow the noise
+rather than the tile grid. Change the terrain rules and both paths change. `sampleTile` runs
+thousands of times per chunk bake, so keep it fast.
 
-### The code rasterises one slanted edge at a time
+### Rasterize one slanted edge at a time
 
-Each shape in `render/pixel.ts` with a diagonal side (`px`, `span`, `wedge`, `spike`,
-`cone`, `line`, `sweep`) rounds each edge as its own linear ramp, and it divides last.
-Three errors are possible:
+Every shape in `render/pixel.ts` with a diagonal side (`px`, `span`, `wedge`, `spike`,
+`cone`, `line`, `sweep`) rounds each edge as its own linear ramp and divides last. Three
+things go wrong otherwise:
 
-- If you round a position and a size separately, the far edge gets the error from the near
-  edge.
-- If you centre a rounded width, the two sides connect, and the slant stutters with the
-  parity of the width.
-- If you write `d * (i / n)`, a half step goes to the incorrect side of a tie, and one
-  stair goes out of an otherwise regular run.
+- Round a position and a size separately, and the far edge inherits the near edge's error.
+- Center a rounded width, and the two sides couple so the slant stutters with the parity of
+  the width.
+- Write `d * (i / n)`, and a half step lands on the wrong side of a tie, throwing one stair
+  out of an otherwise even run.
 
-### Do not scale a sprite with `ctx.scale`
+### Don't scale a sprite with `ctx.scale`
 
-`fillRect` on a fractional edge makes an anti-aliased edge, and the result is soft. Use
-whole pixels for each value that becomes the edge or the offset of a rectangle. A radius can
-stay fractional.
+`fillRect` on a fractional edge antialiases, and the result looks soft. Use whole pixels for
+anything that becomes a rectangle's edge or offset. A radius can stay fractional.
 
-`drawFrame` in `render/assets.ts` obeys this when it cuts the atlases. It rounds the size and
-the offset of each frame to whole pixels, and it mirrors with `ctx.scale(-1, 1)` on the whole
-cell only, which is exact.
+`drawFrame` in `render/assets.ts` follows this when it cuts atlases. It rounds each frame's
+size and offset to whole pixels, and it only mirrors whole cells with `ctx.scale(-1, 1)`,
+which is exact.
 
 ## Architecture
 
@@ -390,190 +373,195 @@ src/
                  loot.ts, save.ts (the schema only), offline.ts (a pure ledger)
   render/        pixel.ts, assets.ts, terrain.ts, minimap.ts, font.ts, renderer.ts
   ui/            ui.ts (the HUD overlay), storage.ts (the only file that knows about localStorage)
-  assets/        types.ts (ids and geometry), frames.ts (GENERATED, see below)
+  assets/        types.ts (IDs, geometry, manifests), frames.ts (GENERATED)
 tools/
-  measure-atlas.mjs   finds the frames in each atlas and writes src/assets/frames.ts
+  measure-atlas.mjs         measures model-authored atlases into src/assets/frames.ts
+  build-character-atlas.mjs composes an 8-facing character sheet from 8 strips
+  art/                      the generation pipeline; see tools/art/README.md
+  lib/                      png.mjs (RGBA read/write), segment.mjs (sprite finding)
+art/
+  characters/<name>/        turnaround, 8 strips, desc.txt, sheet.json
 ```
 
-### The art comes from four atlases
+### Where the art comes from
 
-`public/assets/generated` holds four PNG atlases: the warrior, the enemies, the support art
-(people, props, effects, icons), and the terrain. `ASSET_MANIFEST` in `src/assets/types.ts`
-lists them with the size each one must have. Start-up rejects an atlas that is absent or
-that has a different size, before it builds the simulation.
+`public/assets/generated` holds the PNGs, and `ASSET_MANIFEST` in `src/assets/types.ts`
+lists each one with the exact size it must have. Startup rejects a missing or wrong-sized
+asset before it builds the simulation.
 
-`render/assets.ts` cuts the atlases into sheets, props, and icons at start-up.
-`PixelCanvas` in `render/pixel.ts` still draws effects and the shapes the HUD needs.
+There are two kinds:
 
-`PixelCanvas.spike` becomes narrow in the downward direction, thus it is wide at the top.
-`PixelCanvas.cone` becomes narrow in the upward direction. If you select the incorrect one,
-you get upside-down trees, ears, flames, and tents, and you get no error.
+- **Composed character sheets** — `warrior-atlas-8dir.png` and `wolf-atlas-8dir.png`, plus
+  `warrior-portrait.png`. This project builds these, so their grids are exact.
+- **Model-authored atlases** — `enemy-atlas.png`, `support-atlas.png`, and
+  `terrain-atlas.png`. A model laid these out, so their contents have to be measured.
+
+`render/assets.ts` turns them into sheets, props, and icons at startup. `PixelCanvas` in
+`render/pixel.ts` still draws effects and the shapes the HUD needs.
+
+`PixelCanvas.spike` narrows downward, so it's wide at the top. `PixelCanvas.cone` narrows
+upward. Pick the wrong one and you get upside-down trees, ears, flames, and tents — with no
+error to warn you.
 
 ### Never divide an atlas. Measure it.
 
-An image model drew these atlases. Their sprites are not on a grid that divides evenly, and
-no prompt makes them. A measured strip of four frames, asked for with even spacing, came
-back at 483, 486, and 486 pixels where an even division would use 494.
+A model drew the enemy, support, and terrain atlases, and their sprites don't sit on a grid
+that divides evenly. No prompt fixes that: a strip generated with explicit instructions for
+even spacing came back at 483, 486, and 486 px where even division would use 494.
 
-Thus `tools/measure-atlas.mjs` finds each sprite by its own pixels and writes
-`src/assets/frames.ts`. Run `npm run atlas:measure` after any atlas changes, and commit the
-result. No code at run time may divide an atlas by a row or a column count. That mistake
-gives no error: it cut the feet off every warrior frame, it left one facing empty, and it
-let the two ability icons bleed into each other.
+So `tools/measure-atlas.mjs` finds each sprite by its own pixels and writes
+`src/assets/frames.ts`. Run `npm run atlas:measure` after any atlas changes and commit the
+result. Nothing at runtime may divide an atlas by a row or column count. That mistake is
+silent: it sheared the feet off every warrior frame, left one facing blank, and let the two
+ability icons bleed into each other.
 
-The tool asserts the row and column counts. Thus an atlas that comes back a different shape
-stops the tool instead of rendering incorrectly.
+The tool asserts row and column counts, so an atlas that comes back a different shape stops
+the tool instead of rendering wrong.
 
-`radius` in the tool joins the parts of one sprite, such as a sword tip, without bridging to
-its neighbour. `clips` groups the columns of one animation. The layout pitch is fitted
-inside a clip and nowhere else, because the warrior's walk frames sit about 151 px apart and
-its attack frames about 209 px apart. One fit across the row splits that difference and
-reads as a drift of about 25 px in each column, which slides the body across the ground.
+`radius` joins the parts of one sprite — a sword tip, a lifted paw — without bridging to its
+neighbor. `clips` groups the columns of a single animation. The layout pitch is fitted
+within a clip and nowhere else, because a sheet spaces its clips differently, and one fit
+across the whole row splits the difference into a steady drift that slides the body along
+the ground.
 
 ### Every frame stands on its own feet
 
-`AtlasFrame.oy` is the distance from the top of a frame to its own sole. The sole is the
-lowest scanline that is wide enough to be a foot, thus a sword that hangs below a boot does
-not become the thing the figure stands on.
+`AtlasFrame.oy` is the distance from a frame's top to its own sole, where the sole is the
+lowest scanline wide enough to be a foot. That way a sword hanging below a boot doesn't
+become the thing the figure stands on.
 
-`drawFrame` puts that sole on `anchorY` in each pose and in each facing. Thus a character at
+`drawFrame` puts that sole on `anchorY` in every pose and every facing, so a character at
 rest always has its feet on the ground.
 
-An earlier rule took one line for a whole row, from the lowest point anything in it reached.
-The warrior's three attack frames are drawn 3 px higher than his walk frames, so the attack
-decided where the standing figure's feet went. The figure then hovered, by a different
-amount in each facing, and it bobbed as the player turned.
+An earlier rule took one line per row, from the lowest point anything in it reached. The
+warrior's three attack frames are drawn 3 px higher than his walk frames, so the attack
+decided where the standing figure's feet went. The figure hovered — by a different amount in
+each facing — and bobbed as the player turned.
 
-`drawFrame` rounds the top edge and the bottom edge on their own and takes the height from
-the difference. If it rounded the height instead, the parity of that height would decide
-whether the sole landed on the line or one pixel above it, and the figure would flutter by a
-pixel as the player turned. This is the rule `render/pixel.ts` follows for its own shapes.
+`drawFrame` rounds the top and bottom edges separately and takes the height from the
+difference. Round the height instead and its parity decides whether the sole lands on the
+line or a pixel above it, so the figure flutters as the player turns. This is the same rule
+`render/pixel.ts` follows for its own shapes.
 
-`AtlasFrame.ox` is what is left of the frame's position after the layout pitch comes out.
-Thus it is movement inside the clip, and nothing else. A mirrored cell reflects `ox` with
-it, thus a mirrored walk sways in the correct direction.
+`AtlasFrame.ox` is whatever is left of a frame's position once the layout pitch comes out, so
+it's movement inside the clip and nothing else. Mirroring a cell reflects `ox` along with the
+art, so a mirrored walk sways the right way.
 
-### A sheet has 8 rows, one row for each facing octant
+### Sheets have 8 rows, one per facing octant
 
-`facingToDir` in `core/math.ts` gives the index: `0 S, 1 W, 2 E, 3 N, 4 SE, 5 SW, 6 NE,
-7 NW`. The atlases do not hold eight octants. `WARRIOR_FACINGS` in `render/assets.ts` says
-which authored row each octant takes.
+`facingToDir` in `core/math.ts` returns the row index: `0 S, 1 W, 2 E, 3 N, 4 SE, 5 SW,
+6 NE, 7 NW`. Composed character sheets are built in that order, so their rows map straight
+to it with no lookup table.
 
 ### Never mirror a figure that carries something
 
-The warrior holds his sword in his right hand and his shield on his left arm. A mirror puts
-them in the wrong hands. Walking east and then west swapped them in front of the player.
+The warrior holds his sword in his right hand and his shield on his left arm. Mirroring puts
+them in the wrong hands — walking east and then west visibly swapped them in front of the
+player.
 
-Thus a character sheet holds a row that an artist drew for each of the eight facings.
-`CHARACTER_SHEETS` in `src/assets/types.ts` lists the sheets that have one.
+So a character sheet holds a row that was drawn for each of the eight facings.
+`CHARACTER_SHEETS` in `src/assets/types.ts` lists the sheets that have one. A beast carries
+nothing, so mirroring costs it nothing.
 
-### A composed character sheet is the sheet
+### A composed sheet is the sheet
 
-`tools/build-character-atlas.mjs` takes one strip of frames for each facing and composes an
-atlas: 8 rows in the order `facingToDir` numbers them, at the size the game draws at. Thus
-`preloadArt` wraps the image and blits a cell straight to the screen. It does not measure,
-scale, or redraw the art. Do not put a composed sheet through `measure-atlas.mjs`.
+`tools/build-character-atlas.mjs` takes one strip of frames per facing and composes an
+atlas: 8 rows in `facingToDir` order, at the size the game draws. `preloadArt` then wraps the
+image and blits a cell straight to the screen — no measuring, no scaling, no redrawing. Don't
+run a composed sheet through `measure-atlas.mjs`.
 
-`CHARACTER_SHEETS` records the grid the tool chose. `preloadArt` checks the image against
-those numbers, thus a rebuild that changes the grid stops at start-up.
+`CHARACTER_SHEETS` records the grid the tool chose, and `preloadArt` checks the image against
+it, so a rebuild that changes the grid fails at startup.
 
-The tool gives each facing its own scale. An image model draws each strip on its own and
-picks its own size: a wolf seen head-on came out three times the size of the same wolf seen
-from the side. Each facing therefore normalises to the same standing height.
+The tool gives each facing its own scale. A model draws each strip separately and picks its
+own size — a wolf seen head-on came out three times the size of the same wolf from the side —
+so every facing normalizes to the same standing height.
 
-### A sheet that is not directional takes its row from its heading
+### A non-directional sheet takes its row from the heading
 
-`Sheet.directional` is false when the eight rows hold one side view repeated. There is no
-row for up or for down, thus `Renderer.drawEnemy` selects row W or row E from the sign of
+`Sheet.directional` is false when the eight rows are one side view repeated. There's no row
+for up or down, so `Renderer.drawEnemy` picks row W or row E from the sign of
 `Math.cos(e.facing)` and ignores `Enemy.dir`.
 
-An octant covers 45 degrees. The two vertical octants both held the eastward art, thus a
-wolf that ran down and to the left ran facing right. The sign of the heading has no such
-gap. A directional sheet has a row for each octant and uses `Enemy.dir`.
+An octant spans 45°. Both vertical octants used to hold the eastward art, so a wolf running
+down and to the left ran facing right. The sign of the heading has no such gap. A directional
+sheet has a row per octant and uses `Enemy.dir`.
 
-The corpse bake takes the side view from row 2 by its index. Thus row 2 must stay E.
+The corpse bake pulls the side view from row 2 by index, so row 2 has to stay E.
 
-The sheet that an enemy uses is on the enemy in `Enemy.sheet`. Do not look it up from the
-species, because an apex enemy uses neither the ordinary body nor the elite body. The
-collision radius and the reach come from `BEAST_GEOMETRY[sheet].renderScale`, which is also
-the only control on how large the beast draws. Thus the art and the hitbox stay together.
+An enemy's sheet lives on the enemy in `Enemy.sheet`. Don't look it up from the species,
+because an apex enemy uses neither the ordinary body nor the elite one. Collision radius and
+reach both come from `BEAST_GEOMETRY[sheet].renderScale`, which is also the only control over
+how large a beast draws — that's what keeps art and hitbox together.
 
-### The enemy atlas holds no walk cycle
+### The enemy atlas has no walk cycle
 
-It holds two poses for each beast: an idle and an attack. `beastSheet` puts the idle in
-columns 0 to 3 with a bob of one pixel, because the renderer asks for four walk frames. Thus
-a beast on that atlas cannot animate its walk. Do not try to correct this in code. It needs
-a composed sheet of its own, as the wolf has.
+It holds two poses per beast, an idle and an attack. `beastSheet` puts the idle in columns 0
+through 3 with a one-pixel bob, because the renderer asks for four walk frames. A beast on
+that atlas can't animate its walk, and no code change fixes it — it needs a composed sheet of
+its own, like the wolf has.
 
-`COMPOSED_BEASTS` in `render/assets.ts` says which species have one. The others still come
+`COMPOSED_BEASTS` in `render/assets.ts` lists the species that have one. The rest still come
 from the enemy atlas.
 
-### Text in the world uses the bitmap font
+### World text uses the bitmap font
 
-`render/font.ts` has a bitmap font of 5 x 7 pixels. Use it. Do not use `fillText`. The
-canvas makes anti-aliased text, the buffer has a low resolution, and the magnification then
-makes the text unreadable.
+`render/font.ts` has a 5 × 7 bitmap font. Use it, not `fillText`. Canvas text is
+antialiased, the buffer is low-resolution, and magnifying the result makes it unreadable.
 
-### The boundary between the game and the UI
+### The boundary between game and UI
 
-The simulation does not touch the DOM. The renderer draws to the canvas only. `Game.hooks`
-(`log`, `banner`, `dirty`) is the one channel out of the simulation, and `UI` connects it. A
-panel builds itself again only when `dirty()` occurs or when the panel opens. Cheap widgets
-(bars, cooldowns, the minimap) update in each frame. Each change to the inventory, the
-quests, or the counters must call `hooks.dirty()`. If it does not, the open panel shows old
-data.
+The simulation never touches the DOM, and the renderer only draws to the canvas.
+`Game.hooks` (`log`, `banner`, `dirty`) is the single channel out, and `UI` wires it up. A
+panel rebuilds only on `dirty()` or when it opens, while cheap widgets — bars, cooldowns, the
+minimap — update every frame. Any change to inventory, quests, or counters has to call
+`hooks.dirty()`, or an open panel keeps showing stale data.
 
-### The layers of the persistence
+### The persistence layers
 
 `game/save.ts` holds the schema and the version constant. `game/offline.ts` is a pure
-function: `(save, elapsed, rng) → OfflineReport`. `ui/storage.ts` is the only file that
-knows about localStorage. `Game` makes and reads a plain object, and it does not touch the
-storage, because a server must be able to keep the same schema for each account.
-`offline.ts` exports `killsPerHour`. The ledger and the Hunt tab both use it. Thus the rate
-that the game shows to a player before they select a ground is the rate that the ledger
-pays.
+function: `(save, elapsed, rng) → OfflineReport`. `ui/storage.ts` is the only file that knows
+about localStorage. `Game` builds and reads a plain object and never touches storage, because
+a server has to be able to hold the same schema per account. `offline.ts` exports
+`killsPerHour`, used by both the ledger and the Hunt tab, so the rate a player sees before
+choosing a hunting ground is the rate the ledger pays.
 
-### The stack order of the HUD
+### HUD stacking order
 
-`#stickzone` is a large invisible catcher for pointer events in the lower left of the
-screen. Each interactive control that overlaps it needs a higher `z-index`. If it does not
-have one, it stops receiving taps, and it gives no error. The return report is at
-`z-index: 45`.
+`#stickzone` is a large invisible pointer catcher in the lower left. Any interactive control
+that overlaps it needs a higher `z-index`, or it silently stops receiving taps. The return
+report sits at `z-index: 45`.
 
 ### Units
 
-World pixels and art pixels are the same unit. `TILE` is 32. A sprite has its anchor at the
-feet through `Sheet.anchorY`. The scene sorts by the ground position on the y axis. Thus
-props and entities go in front of and behind each other correctly.
+World pixels and art pixels are the same unit, and `TILE` is 32. Sprites anchor at the feet
+through `Sheet.anchorY`, and the scene sorts by ground position on the y axis, so props and
+entities overlap correctly.
 
 ## Tuning
 
-A change to the balance almost never needs a change to the simulation code.
-`src/game/content.ts` holds the statistics of each enemy, the drop rates, the XP curve, the
-derivation of the statistics, the numbers for each ability, the item bases and affixes, the
-quest chain, the milestone table, both reward curves, the offline model (`OFFLINE`), the
-seek ranges of auto-battle (`AUTO`),
-`TALENT_ROWS`, `RESPEC_COST_PER_LEVEL`, `UNIQUES`, `EMBER`, `MASTERY_TIERS`, `BEHAVIOUR`,
-`BOSSES`, `BOSS`, and the `Mods` and `COMBINE` tables that all of these use.
+Balance changes almost never need simulation changes. `src/game/content.ts` holds enemy
+stats, drop rates, the XP curve, stat derivation, ability numbers, item bases and affixes,
+the quest chain, the milestone table, both reward curves, the offline model (`OFFLINE`),
+auto-battle seek ranges (`AUTO`), `TALENT_ROWS`, `RESPEC_COST_PER_LEVEL`, `UNIQUES`, `EMBER`,
+`MASTERY_TIERS`, `BEHAVIOUR`, `BOSSES`, `BOSS`, and the `Mods` and `COMBINE` tables they all
+use.
 
-The `REGIONS` array in `src/game/world.ts` holds the position of each region, the level
-bands, the pack sizes, and the quantity of nodes. `CAMPS`, `ROAD_LINKS`, `LANDMARKS`, and
-`NPCS` are in the same file. An `Npc` entry holds the position, the name, and each line
-that the person says.
+`REGIONS` in `src/game/world.ts` holds region positions, level bands, pack sizes, and node
+counts. `CAMPS`, `ROAD_LINKS`, `LANDMARKS`, and `NPCS` live in the same file. An `Npc` entry
+holds a position, a name, and every line that person says.
 
-A new talent or a new relic is usually one entry in a table. It can also need one field on
-`Mods` and its `COMBINE` rule. The simulation reads `this.mods`. It does not read the
-tables.
+A new talent or relic is usually one table entry. It might also need a field on `Mods` and a
+`COMBINE` rule. The simulation reads `this.mods`; it never reads the tables.
 
-A new species is one entry in `ENEMY_KINDS`, one set of statistics in `ENEMIES`, one id in
-`BEAST_SHEET_IDS` with its scale in `BEAST_GEOMETRY`, one row in `BEAST_ROW`, and one region
-to live in. It also needs a row of its own in the enemy atlas. The build lists each other
-location that needs a change.
+A new species needs an entry in `ENEMY_KINDS`, stats in `ENEMIES`, an ID in
+`BEAST_SHEET_IDS` with its scale in `BEAST_GEOMETRY`, a row in `BEAST_ROW`, and a region to
+live in. It also needs a row of its own in the enemy atlas. The build lists everywhere else
+that needs updating.
 
-### A known gap in the balance
+### A known balance gap
 
-`OFFLINE.efficiency` is 0.72. Thus accrual when the player is away is almost as fast as
-play. A night away can move a character to the top of the level range in one session. Two
-corrections are possible, and each one is a change of one line: make `xpForLevel` steeper,
-or make `OFFLINE.efficiency` lower. The selection between them is a design decision. It is
-not a correction of a defect.
+`OFFLINE.efficiency` is 0.72, so being away accrues almost as fast as playing. A night away
+can carry a character to the top of the level range in one session. There are two one-line
+fixes: make `xpForLevel` steeper, or lower `OFFLINE.efficiency`. Choosing between them is a
+design decision, not a bug fix.
