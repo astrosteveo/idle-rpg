@@ -30,6 +30,29 @@ import breaks the build. Run `npm run typecheck` before you report that you're d
 
 `verbatimModuleSyntax` is on too, so import types with `import type`.
 
+### Running one test
+
+```bash
+npx vitest run tests/unit/atlas.test.ts   # one file
+npx vitest run -t "own feet"              # one test, matched by name
+npx vitest                                # watch mode
+npx playwright test --project=mobile      # one viewport
+npx playwright test -g "loads assets"     # one spec, matched by name
+```
+
+### Two things that will catch you out
+
+**Browser tests run against `dist/`, not your working tree.** Playwright starts a
+`webServer` that runs `npm run preview`, which serves the last build on port 4173. Change
+source, run `npm run test:browser` on its own, and you're testing stale code with nothing to
+warn you. Build first, or use `npm run verify`, which builds for you. `reuseExistingServer`
+is on, so a dev or preview server already listening on 4173 gets reused as-is.
+
+**Every browser spec runs five times**, once per viewport project: `desktop-concept`,
+`portrait-concept`, `desktop-wide`, `tablet`, and `mobile`. That's why a single spec file
+reports 20 tests, and why some of them skip — the mobile-only assertions don't apply to the
+desktop projects.
+
 ## How to verify a change
 
 Vitest covers the units and Playwright covers the smoke tests, but neither is enough on its
@@ -414,6 +437,9 @@ So `tools/measure-atlas.mjs` finds each sprite by its own pixels and writes
 result. Nothing at runtime may divide an atlas by a row or column count. That mistake is
 silent: it sheared the feet off every warrior frame, left one facing blank, and let the two
 ability icons bleed into each other.
+
+`src/assets/frames.ts` is generated. Don't hand-edit it — rerun `npm run atlas:measure`
+instead. It's committed because the runtime imports it, not because it's source.
 
 The tool asserts row and column counts, so an atlas that comes back a different shape stops
 the tool instead of rendering wrong.
