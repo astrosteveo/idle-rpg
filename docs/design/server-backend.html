@@ -106,13 +106,7 @@
     margin: 0;
   }
 
-  .dek {
-    font-size: 1.16rem;
-    color: var(--ink-soft);
-    max-width: 42ch;
-    margin: 0;
-    text-wrap: pretty;
-  }
+  .dek { font-size: 1.16rem; color: var(--ink-soft); max-width: 44ch; margin: 0; text-wrap: pretty; }
 
   .meta {
     display: flex;
@@ -172,7 +166,7 @@
 
   pre {
     font-family: var(--mono);
-    font-size: .78rem;
+    font-size: .76rem;
     line-height: 1.62;
     background: var(--sunken);
     border: 1px solid var(--rule);
@@ -188,13 +182,7 @@
 
   /* ---- Tables ---- */
   .scroll { overflow-x: auto; border: 1px solid var(--rule); background: var(--surface); }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    font-family: var(--util);
-    font-size: .84rem;
-    line-height: 1.5;
-  }
+  table { border-collapse: collapse; width: 100%; font-family: var(--util); font-size: .84rem; line-height: 1.5; }
   th, td { text-align: left; padding: .7rem .9rem; vertical-align: top; border-bottom: 1px solid var(--rule); }
   th {
     font-size: .68rem;
@@ -209,6 +197,19 @@
   td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
   tr.pick td { background: var(--brass-lo); }
   tr.pick td:first-child { font-weight: 700; }
+
+  .chip {
+    display: inline-block;
+    font-size: .66rem;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    padding: .16rem .45rem;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+  }
+  .chip.no  { color: var(--steel); }
+  .chip.yes { color: var(--warn); }
 
   /* ---- Callout ---- */
   .callout {
@@ -232,7 +233,7 @@
   .callout.good .label { color: var(--steel); }
   .callout p { font-size: .95rem; }
 
-  /* ---- Tiers of authority ---- */
+  /* ---- Tiers ---- */
   .tiers { display: flex; flex-direction: column; gap: 1rem; }
   .tier {
     background: var(--surface);
@@ -271,7 +272,7 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* ---- Measured figures ---- */
+  /* ---- Figures ---- */
   .figures {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
@@ -292,14 +293,9 @@
 
   /* ---- Rewrite items ---- */
   .items { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
-  .item { background: var(--surface); padding: 1.05rem 1.2rem; display: grid; grid-template-columns: 2.5rem 1fr; gap: .4rem .9rem; }
-  .item .tag {
-    font-family: var(--mono);
-    font-size: .78rem;
-    font-weight: 700;
-    color: var(--brass);
-    padding-top: .1rem;
-  }
+  .item { background: var(--surface); padding: 1.05rem 1.2rem; display: grid; grid-template-columns: 2.6rem 1fr; gap: .4rem .9rem; }
+  .item .tag { font-family: var(--mono); font-size: .78rem; font-weight: 700; color: var(--brass); padding-top: .1rem; }
+  .item.mmo .tag { color: var(--steel); }
   .item h3 { margin: 0; font-family: var(--display); font-size: 1.02rem; font-weight: 600; text-transform: none; letter-spacing: 0; }
   .item .body { grid-column: 2; font-size: .93rem; display: flex; flex-direction: column; gap: .5rem; }
 
@@ -332,6 +328,7 @@
     position: relative;
     z-index: 1;
   }
+  .phase.net .num { border-color: var(--steel); color: var(--steel); }
   .phase .content { display: flex; flex-direction: column; gap: .55rem; padding-top: .3rem; }
   .phase h3 { font-family: var(--display); font-size: 1.12rem; font-weight: 600; text-transform: none; letter-spacing: 0; margin: 0; }
   .phase p { font-size: .95rem; }
@@ -372,64 +369,95 @@
   <header class="masthead">
     <p class="eyebrow">Wildmarch &middot; Technical plan</p>
     <h1>Server Backend Design</h1>
-    <p class="dek">The server owns the simulation. The client sends input, draws what it's told,
-      and decides nothing.</p>
+    <p class="dek">A server-authoritative mini-MMO: a shared world, parties, dungeons, and
+      classes &mdash; built on a simulation the server owns outright.</p>
     <div class="meta">
       <span><b>Repo</b> astrosteveo/idle-rpg</span>
       <span><b>Branch</b> worktree-server-backend-design</span>
-      <span><b>Basis</b> Two measurements, both reproducible in-repo</span>
+      <span><b>Basis</b> Three measurements, all reproducible in-repo</span>
     </div>
   </header>
 
   <section>
-    <h2>What authority buys, and what it costs</h2>
-    <p><b>Buys:</b> the save stops being a claim. Progress, loot, and elapsed time become facts the
-      server produced. There is nothing to verify when the server rolled the dice itself. Ghosts,
-      ladders, and a shared world stop being reporting features and become readouts of state the
-      server already holds.</p>
-    <p><b>Costs:</b> the simulation has to become something a server can host &mdash; a fixed
-      timestep, randomness split by consequence, no dependency on the view, and a wire format
-      separate from its internal state. Plus transport, session lifecycle, and client-side
-      prediction so movement still feels immediate.</p>
-    <p>That's a real project. It's also almost entirely mechanical: the client already has an
-      injected clock, an injected RNG factory, a command and event contract, a pure offline ledger,
-      and a simulation that never touches the DOM. None of the rewrite requires re-architecting the
-      game.</p>
+    <h2>What mini-MMO has to mean here</h2>
+    <p>An MMO feels like an MMO because of five things. Only three need a shared simulation, and
+      separating them is what keeps this affordable.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Feature</th><th>Shared sim?</th><th>How it's served</th></tr></thead>
+        <tbody>
+          <tr><td>Seeing other players in the world</td><td><span class="chip no">No</span></td><td>A presence layer: broadcast positions, no shared sim</td></tr>
+          <tr><td>Chat, guilds, ladders</td><td><span class="chip no">No</span></td><td>Ordinary services over stored state</td></tr>
+          <tr><td>Grouping and fighting together</td><td><span class="chip yes">Yes</span></td><td>One simulation per party</td></tr>
+          <tr><td>Dungeons</td><td><span class="chip yes">Yes</span></td><td>One simulation per party, on an instanced map</td></tr>
+          <tr><td>World bosses</td><td><span class="chip yes">Yes</span></td><td>The one contested surface</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>So the unit of simulation is <b>a party</b>, and a solo player is a party of one. That
+      single decision carries most of this design.</p>
+  </section>
+
+  <section>
+    <h2>The contention problem</h2>
+    <div class="callout">
+      <span class="label">Settle this before anything else</span>
+      <p><b>In an idle auto-battler, shared mob spawns are hostile to the core loop.</b> Your income
+        is kills per hour. If another player's auto-battle competes for the same wolves, your rate
+        drops through no decision of yours, while you aren't even watching. Real MMOs resolve that
+        with tagging, competition, and player skill. None of those apply when nobody is at the
+        keyboard.</p>
+    </div>
+    <ul>
+      <li><b>Beasts are party-scoped.</b> The wolves you fight are yours. No contention, ever.</li>
+      <li><b>Players are world-shared.</b> You see everyone, in the same seeded world, at the same
+        landmarks. You can walk up to someone and group with them.</li>
+      <li><b>Apex beasts are contested.</b> They already stand on a wall clock every client agrees
+        on, and turning up on time is the entire point of them. This is the one place shared combat
+        is the feature rather than the bug.</li>
+      <li><b>Dungeons are private to the party</b> by definition.</li>
+    </ul>
+    <p>This is phasing, and it's what mobile MMOs do. You get the social world without the resource
+      war, and it costs nothing extra: a party's simulation is exactly the simulation this game
+      already runs.</p>
+    <h3>Idle is solo</h3>
+    <p>The corollary. You cannot idle in a party, because the other members are live.
+      Disconnecting from a party removes you from its instance and settles you on your own.
+      Disconnecting inside a dungeon returns you to its entrance. That keeps the offline tiers
+      simple, and it's also the right game design: grouping is something you do when you're
+      present.</p>
   </section>
 
   <section>
     <h2>The trap this design avoids</h2>
     <div class="callout">
       <span class="label">Where projects like this die</span>
-      <p>&ldquo;Server-authoritative&rdquo; gets conflated with &ldquo;deterministic
+      <p>&ldquo;Server-authoritative multiplayer&rdquo; gets conflated with &ldquo;deterministic
         lockstep.&rdquo; Lockstep needs bit-identical results on both sides, which in JavaScript
         means fighting <code>Math.sin</code>, <code>Math.cos</code>, <code>Math.atan2</code>, and
         <code>Math.pow</code> &mdash; none specified to the last bit, all differing between V8,
         SpiderMonkey, and JavaScriptCore.</p>
     </div>
-    <p><b>Wildmarch never needs determinism, and this plan is built so it never does.</b> Three
-      reasons, all specific to this game:</p>
+    <p><b>Wildmarch never needs determinism, and grouping doesn't change that.</b></p>
     <ul>
-      <li><b>There is no shared space.</b> Every player has their own world from one seed. No two
-        clients ever need to agree on where a wolf is.</li>
       <li><b>The client never decides anything.</b> It doesn't roll damage, pick loot, or run AI.
         A slightly different number would have nowhere to go.</li>
-      <li><b>Combat is automatic.</b> The player controls movement and two buttons. Nobody aims, so
-        nobody notices 80&nbsp;ms of latency on a wolf's approach.</li>
+      <li><b>Parties share a server simulation, not a computation.</b> Members receive the same
+        snapshots from the same authority. They never independently arrive at the same answer.</li>
+      <li><b>Combat is automatic.</b> Nobody aims, so nobody notices 80&nbsp;ms of latency on a
+        wolf's approach.</li>
     </ul>
-    <p>So the client predicts <b>its own movement only</b> and interpolates everything else. That's
-      a small shared module &mdash; terrain collision and position integration &mdash; not a
-      bit-exact copy of the whole simulation.</p>
+    <p>The client predicts <b>its own movement only</b> and interpolates everything else, other
+      players included.</p>
   </section>
 
   <section>
     <h2>What it costs to run</h2>
-    <p>The load-bearing question for any authoritative design is whether you can afford to run the
-      simulation for everyone at once. Measured with <code>npm run bench</code>, which runs the game
-      headless with an injected clock &mdash; exactly as the server will.</p>
+    <p>Measured with <code>npm run bench</code>, which runs the game headless with an injected
+      clock &mdash; exactly as the server will.</p>
     <div class="scroll">
       <table>
-        <thead><tr><th>Tick rate</th><th>Cost per tick</th><th>Real-time factor</th><th>Simulations per core</th></tr></thead>
+        <thead><tr><th>Tick rate</th><th>Cost per tick</th><th>Real-time factor</th><th>Party sims per core</th></tr></thead>
         <tbody>
           <tr><td class="num">10 Hz</td><td class="num">0.046 ms</td><td class="num">2,194&times;</td><td class="num">~2,190</td></tr>
           <tr class="pick"><td class="num">20 Hz</td><td class="num">0.037 ms</td><td class="num">1,358&times;</td><td class="num">~1,360</td></tr>
@@ -439,75 +467,85 @@
       </table>
     </div>
     <p>Each run is ten simulated minutes of auto-battle that actually fights &mdash; 150 to 177
-      kills, level 9 to 11 by the end. Cost per tick is flat across rates because it's dominated by
-      iterating roughly 120 beasts across 52 spawn nodes, so tick rate trades straight against
-      capacity.</p>
+      kills, level 9 to 11 by the end. Cost is dominated by iterating roughly 120 beasts across 52
+      spawn nodes, and <b>that population is per party, not per player</b>. A five-player party
+      costs about what a solo player costs, plus four more sets of movement and swings.</p>
     <div class="callout good">
       <span class="label">The decision this settles</span>
-      <p><b>20&nbsp;Hz.</b> Four times the fastest attack interval in the game, 0.74&nbsp;ms of CPU
-        per simulated second, an order of magnitude of headroom. Treat the figures as an upper bound
-        &mdash; single-threaded, one machine, no network I/O or serialization. Budget a tenth of it
-        and one eight-core box still carries a four-figure concurrent player count.
-        <b>Authority is affordable here</b>, because Wildmarch's world is small, per-player, and
-        resolved by rules rather than physics.</p>
+      <p><b>Grouping makes players cheaper.</b> At 20&nbsp;Hz one core carries ~1,360 parties: near
+        1,900 players if most people solo, near 4,000 if parties average three. Treat the figures as
+        an upper bound &mdash; single-threaded, one machine, no network I/O or serialization &mdash;
+        and budget a tenth. One eight-core box still carries a four-figure concurrent player
+        count.</p>
     </div>
+    <p>The presence layer is not a simulation and doesn't come out of this budget. It's a spatial
+      index over positions with a pub/sub on top: cull to a view radius, cap at the ~40 nearest
+      players, broadcast at 5&ndash;10&nbsp;Hz. About 4&nbsp;KB/s per player, scaling independently
+      of the simulation fleet.</p>
   </section>
 
   <section>
     <h2>The architecture</h2>
-    <p>One simulation instance per active session. No shared entity space, no interest management
-      across players, no cross-session anything.</p>
-<pre><code>client                          server
-------                          ------
-input  ──── seq, dt, move ────▶  session
-                                   │
-render ◀─── snapshot deltas ────  simulation <span class="a">(20 Hz, authoritative)</span>
-  │                                │
-  └─ movement predictor            └─ save / hibernate ──▶ Postgres
-     <span class="c">(shared collision code)</span></code></pre>
+<pre><code>client                                server
+------                                ------
+input   ─── seq, dt, move, ability ─▶  session ──▶ party instance
+                                                     │  simulation <span class="a">(20 Hz, authoritative)</span>
+render  ◀── snapshot deltas ──────────────────────── │  beasts, loot, combat, XP
+  │                                                  │
+  ├─ movement predictor                              └─ hibernate ──▶ Postgres
+  │  <span class="c">(shared collision code)</span>
+  │
+  └─ presence ◀── nearby players ──── presence service <span class="c">(spatial index, not a sim)</span></code></pre>
+    <p>Four lifecycles, deliberately separate:</p>
+    <ul>
+      <li><b>Session</b> &mdash; one connection, one character. Connecting, live, draining,
+        hibernated.</li>
+      <li><b>Party instance</b> &mdash; one simulation, one to five characters, one map. Created
+        when the first member enters, destroyed when the last leaves.</li>
+      <li><b>Dungeon instance</b> &mdash; a party instance on an instanced map, ephemeral, with a
+        completion state.</li>
+      <li><b>Presence</b> &mdash; a character's position published to the world, independent of
+        which instance is simulating it.</li>
+    </ul>
+    <p>Joining a party means migrating a character from one instance to another &mdash; the same
+      machinery as hibernation. That's why hibernation is worth building carefully in Phase 4
+      rather than expediently.</p>
 
     <h3>Three tiers of authority</h3>
-    <p>An idle game can't keep a live simulation running for everyone forever &mdash; most players
-      are away most of the time, and simulating an empty room is pure cost. Authority degrades in
-      tiers, and the measurements above set the boundaries.</p>
     <div class="tiers">
-
       <article class="tier t1">
         <span class="n">LIVE</span>
         <h3>Connected</h3>
         <div class="body"><p>The real simulation at 20&nbsp;Hz, fully authoritative.</p></div>
-        <p class="verdict">0.74 ms of CPU per second, per player.</p>
+        <p class="verdict">0.74 ms of CPU per second, per party.</p>
       </article>
-
       <article class="tier t2">
         <span class="n">CATCH-UP</span>
-        <h3>Reconnect within 15 minutes</h3>
+        <h3>Solo, reconnect within 15 minutes</h3>
         <div class="body">
-          <p>Fast-forward the real simulation. A dropped connection on a train shouldn't hand you a
-            different outcome than staying online, and at 1,358&times; real time, replaying fifteen
+          <p>Fast-forward the real simulation. A dropped connection on a train shouldn't pay
+            differently from staying online, and at 1,358&times; real time, replaying fifteen
             minutes costs two thirds of a second.</p>
         </div>
-        <p class="verdict">0.66 s of CPU, once. This tier is what the measurements unlocked.</p>
+        <p class="verdict">0.66 s of CPU, once. This tier is what the capacity measurement unlocked.</p>
       </article>
-
       <article class="tier t3">
         <span class="n">LEDGER</span>
-        <h3>Longer absences, capped at 12 hours</h3>
+        <h3>Solo, longer absences, capped at 12 hours</h3>
         <div class="body">
           <p><code>runOfflineLedger()</code>, the existing rate model. Replaying twelve real hours
-            would cost 32 seconds of CPU, and nobody is watching closely enough to justify it.</p>
+            would cost 32 seconds of CPU, and nobody is watching that closely.</p>
         </div>
         <p class="verdict">Microseconds &mdash; but see the next section.</p>
       </article>
-
     </div>
   </section>
 
   <section>
     <h2>The gap between the ledger and the game</h2>
     <p><code>OFFLINE.efficiency</code> is 0.72 and states the intent plainly: an hour away should be
-      worth about 0.72 of an hour played, the discount covering healing, pathing, and waiting on
-      respawns. <b>Measured, it pays about half that, and the shortfall is stable.</b></p>
+      worth about 0.72 of an hour played. <b>Measured, it pays about half that, and the shortfall is
+      stable.</b></p>
     <div class="scroll">
       <table>
         <thead><tr><th>Character</th><th>Live kills</th><th>Ledger kills</th><th>Ratio</th></tr></thead>
@@ -518,40 +556,35 @@ render ◀─── snapshot deltas ────  simulation <span class="a">(20
         </tbody>
       </table>
     </div>
-    <p>Gold is worse and noisier &mdash; 0.16&times; to 0.27&times; &mdash; and experience worse
-      still, though both are confounded: auto-battle roams by quest objective rather than by the
-      assigned ground, so the live character drifts into richer regions and outlevels the one the
-      ledger holds in place. The kills column is the trustworthy one, and 0.49 / 0.50 / 0.51 across
-      three levels and two regions is too consistent to be roaming noise.</p>
-    <p>This is a live bug in the shipped game, not something the server introduces. It gets sharper
-      under this design for two reasons:</p>
-    <ul>
-      <li><b>The ledger becomes definitive.</b> Today it's an estimate a client applies to itself.
-        Afterwards it's the server's account of your night.</li>
-      <li><b>The tier boundary becomes visible.</b> If catch-up pays full rate and the ledger pays
-        half, the payout halves at the fifteen-minute mark. Players find cliffs like that in about a
-        day, and the optimal play becomes reconnecting every fourteen minutes.</li>
-    </ul>
-    <p><code>tests/unit/ledger-agreement.test.ts</code> gates this. It's a characterization test: it
-      asserts where the ratio sits today rather than where it should sit, because closing the gap is
-      a balance decision &mdash; raise the ledger's rate, or accept a lower number as the real
-      intent. Both sides are fully deterministic, so any movement in that test is a real change in
-      the model. <b>Fix it before Phase&nbsp;3 ships</b>, when the ledger stops being advisory.</p>
+    <p>Gold is worse and noisier &mdash; 0.16&times; to 0.27&times; &mdash; but confounded:
+      auto-battle roams by quest objective rather than by the assigned ground, so the live character
+      drifts into richer regions. The kills column is the trustworthy one, and 0.49 / 0.50 / 0.51
+      across three levels and two regions is too consistent to be roaming noise.</p>
+    <p>This is a live bug in the shipped game. It gets sharper here for three reasons: the ledger
+      becomes the server's definitive account of an absence; a payout cliff appears at the catch-up
+      boundary, and players find cliffs like that in about a day; and <b>every new class multiplies
+      the problem</b>, because <code>killsPerHour()</code> and each class's real rotation are two
+      models of the same character that have to agree.</p>
+    <p><code>tests/unit/ledger-agreement.test.ts</code> gates it &mdash; a characterization test,
+      asserting where the ratio sits today rather than where it should sit, because closing the gap
+      is a balance decision. <b>Fix it before the ledger becomes authoritative</b>, and keep it green
+      per class after that.</p>
   </section>
 
   <section>
     <h2>The rewrite</h2>
-    <p>Eight items, ordered by dependency, each independently reviewable.</p>
+    <p>Eleven items. R1&ndash;R8 are the server-authority work; R9&ndash;R11 are what mini-MMO adds.
+      Ordered by dependency.</p>
     <div class="items">
 
       <article class="item">
         <span class="tag">R1</span>
         <h3>Fixed timestep</h3>
         <div class="body">
-          <p>The simulation steps at exactly 20&nbsp;Hz. The client accumulates real time into fixed
-            steps and renders with the leftover as an interpolation factor. This <b>deletes</b> the
-            <code>quantise()</code> median filter in <code>main.ts</code> &mdash; its sampling buffer
-            and period estimation exist solely to stabilize a variable frame delta.</p>
+          <p>The simulation steps at exactly 20&nbsp;Hz; the client accumulates real time and renders
+            with the leftover as an interpolation factor. This <b>deletes</b> the
+            <code>quantise()</code> median filter in <code>main.ts</code>, which exists solely to
+            stabilize a variable frame delta.</p>
         </div>
       </article>
 
@@ -561,12 +594,10 @@ render ◀─── snapshot deltas ────  simulation <span class="a">(20
         <div class="body">
           <p>One stream currently serves both dice that matter and dice that don't. Damage variance,
             crit rolls, loot, rarity, AI transitions, wander points, and respawn jitter share a
-            sequence with float-text offsets, corpse lean, effect angles, and spark positions.</p>
-          <p>Split into <b>sim</b> (outcome-changing, server-only, position saved so a session
+            sequence with float-text offsets, corpse lean, and spark positions.</p>
+          <p>Split into <b>sim</b> (outcome-changing, server-only, position saved so an instance
             resumes mid-stream) and <b>fx</b> (only ever seen, client-only). Roughly 25 call sites,
-            each a one-line classification. The most invasive item and the most mechanical &mdash;
-            and once cosmetic draws stop perturbing the loot stream, the simulation becomes
-            replayable for debugging.</p>
+            each a one-line classification.</p>
         </div>
       </article>
 
@@ -574,11 +605,11 @@ render ◀─── snapshot deltas ────  simulation <span class="a">(20
         <span class="tag">R3</span>
         <h3>Take the view out of the simulation</h3>
         <div class="body">
-          <p><code>setView()</code> feeds the camera rectangle into the simulation, and exactly one
-            rule reads it: <code>shouldGiveUp()</code>, which ends a chase when a beast is dragged
-            off the visible screen. That's a fairness bug independent of any server &mdash; an
-            ultrawide monitor currently gets longer chases than a phone. Replace it with a fixed
-            leash in world units.</p>
+          <p><code>setView()</code> feeds the camera rectangle into the simulation and exactly one
+            rule reads it: <code>shouldGiveUp()</code>, which ends a chase when a beast leaves the
+            visible screen. That's a fairness bug today &mdash; an ultrawide monitor gets longer
+            chases than a phone &mdash; and it becomes incoherent the moment two players with
+            different screens share an instance.</p>
         </div>
       </article>
 
@@ -586,13 +617,13 @@ render ◀─── snapshot deltas ────  simulation <span class="a">(20
         <span class="tag">R4</span>
         <h3>Separate simulation state from wire state</h3>
         <div class="body">
-          <p><code>Enemy</code> has 35 fields, most of them server-side AI bookkeeping the client
-            never draws. Serialized naively that's <b>582 bytes per beast</b>, and a full snapshot of
-            122 beasts is <b>71&nbsp;KB</b> &mdash; 1.4&nbsp;MB/s per player at 20&nbsp;Hz.</p>
+          <p><code>Enemy</code> has 35 fields, most of them AI bookkeeping the client never draws.
+            Serialized naively that's <b>582 bytes per beast</b>; 122 beasts is <b>71&nbsp;KB</b>,
+            or 1.4&nbsp;MB/s per player at 20&nbsp;Hz.</p>
           <p>Define an <code>EnemyView</code> of about twelve fields, quantized to roughly a dozen
-            bytes, scoped to an interest radius, sent as deltas at 10&nbsp;Hz. Thirty visible beasts
-            then costs about 3.6&nbsp;KB/s. <b>The wire format is the real bottleneck in this design,
-            not the simulation.</b></p>
+            bytes, interest-scoped, sent as deltas at 10&nbsp;Hz. Mini-MMO makes this <b>more</b>
+            important: party members and nearby players need view types too, and a hub full of
+            avatars is exactly where a naive format falls over.</p>
         </div>
       </article>
 
@@ -609,9 +640,9 @@ render ◀─── snapshot deltas ────  simulation <span class="a">(20
         <span class="tag">R6</span>
         <h3>Transport and session lifecycle</h3>
         <div class="body">
-          <p>WebSocket. The client sends batched input frames stamped with a sequence number; the
-            server replies with snapshot deltas and the last sequence it processed. Session states
-            are connecting, live, draining, hibernated.</p>
+          <p>WebSocket. Batched input frames stamped with a sequence number; snapshot deltas and the
+            last processed sequence in reply. Session and instance lifecycles as above, including
+            character migration between instances.</p>
         </div>
       </article>
 
@@ -619,21 +650,69 @@ render ◀─── snapshot deltas ────  simulation <span class="a">(20
         <span class="tag">R7</span>
         <h3>Client-side prediction, movement only</h3>
         <div class="body">
-          <p>Extract position integration and terrain collision into a module both sides call. The
-            client keeps a ring buffer of unacknowledged inputs and replays them when the server
-            acknowledges a sequence with an authoritative position.</p>
-          <p>Abilities are optimistic: the button lights, the cooldown starts, the server confirms or
-            rejects. Damage numbers appear only when the server says so &mdash; fine, because you
-            aren't aiming.</p>
+          <p>Position integration and terrain collision move into a module both sides call. The
+            client replays unacknowledged inputs when the server acknowledges a sequence. Abilities
+            are optimistic; everything else, other players included, interpolates with about a
+            100&nbsp;ms buffer.</p>
         </div>
       </article>
 
       <article class="item">
         <span class="tag">R8</span>
         <h3>Reconcile the ledger with the simulation</h3>
+        <div class="body"><p>The measured gap above. A shipping requirement, not a nice-to-have.</p></div>
+      </article>
+
+      <article class="item mmo">
+        <span class="tag">R9</span>
+        <h3>Break the save schema while it's free</h3>
         <div class="body">
-          <p>The measured gap above. Listed here because it's a shipping requirement, not a
-            nice-to-have.</p>
+          <p><code>SAVE_VERSION</code> is 1 and <code>readSave()</code> hard-rejects anything else.
+            Classes, dungeons, and parties all change the save: a <b>class</b> on the character; a
+            <b>location</b> richer than <code>x, y</code> (which realm, which map, is it an instance)
+            where position is currently bounded by <code>WORLD_SIZE</code> against an exact seed;
+            <b>per-class talents</b>, since <code>TALENT_ROWS</code> is one Warrior ladder; and a
+            <b>realm seed</b> rather than a per-character one.</p>
+          <p><b>Do all of it before there is a server or a single live player.</b> A schema break
+            costs nothing today and costs a migration over live characters forever after. This is the
+            strongest sequencing argument in the plan.</p>
+        </div>
+      </article>
+
+      <article class="item mmo">
+        <span class="tag">R10</span>
+        <h3>Classes, abilities, and rotations as data</h3>
+        <div class="body">
+          <p>Abilities are hardcoded three ways over: <code>Ability['id']</code> is a two-member
+            union flowing into <code>GameCommand</code>, the array is indexed positionally
+            (<code>abilities[0]</code> is whirlwind) in six places, and <code>deriveStats()</code> is
+            a single formula over str, vit, and agi.</p>
+          <p>But the important part is subtler. <b>In an idle auto-battler the class fantasy lives in
+            the auto-battle rotation, not in the ability buttons</b>, because most of the time nobody
+            is pressing them. Today that rotation is two inline conditions in
+            <code>stepAuto()</code>:</p>
+<pre><code>if (secondwind ready &amp;&amp; hp &lt; 45%)                  use it
+if (whirlwind ready &amp;&amp; enemies within radius &gt;= 2) use it</code></pre>
+          <p>That's a priority list, and it should become one &mdash; an ordered set of rules per
+            class, each a condition from a small vocabulary (own health, an ally's health, enemies
+            within a radius, target is elite or apex, ability ready, buff missing) and an action. A
+            tank's list holds threat; a healer's watches the lowest ally; a ranged class opens at
+            distance and disengages.</p>
+        </div>
+      </article>
+
+      <article class="item mmo">
+        <span class="tag">R11</span>
+        <h3>Give enemies a threat model</h3>
+        <div class="body">
+          <p><code>stepEnemies()</code> computes <code>dist(e.x, e.y, p.x, p.y)</code> against
+            <b>the</b> player, singular. Every aggro, chase, attack, and de-aggro rule in the game is
+            written against exactly one character, and <code>shouldGiveUp(e, dPlayer)</code> takes
+            that one distance as an argument.</p>
+          <p>Parties need beasts to choose among several combatants: a threat table per enemy, damage
+            and healing contributing to it, target selection over that table. This is the largest
+            simulation change in the plan, and it's what makes roles mean anything &mdash; without
+            it, a tank is a character with more health and no job.</p>
         </div>
       </article>
 
@@ -641,25 +720,24 @@ render ◀─── snapshot deltas ────  simulation <span class="a">(20
   </section>
 
   <section>
-    <h2>What survives from the client-authoritative plan</h2>
-    <ul>
-      <li><b><code>readSave()</code> stays.</b> Still the decoder for anything arriving from outside
-        &mdash; and under authority, the outside includes existing <code>localStorage</code> saves
-        being imported.</li>
-      <li><b><code>verify.ts</code> stays, retargeted.</b> The server generates every item, so
-        nothing needs verifying for anti-cheat. Two uses remain: validating imported saves at
-        migration, and asserting internal invariants in tests, where it catches server bugs rather
-        than cheaters. Its 19 tests keep earning their place.</li>
-      <li><b>The wall-clock apex schedule stays.</b> <code>bossWindow()</code> needs no server to
-        agree across clients, and now the server can record who turned up.</li>
-      <li><b>The data model stays</b>, minus the anomaly table. Keep <code>ledger_run</code> for
-        support questions.</li>
-    </ul>
+    <h2>Balance by simulation</h2>
+    <p>The headless harness that measured capacity is also a balance tool, and this is the strongest
+      argument for doing R10 as data rather than as code.</p>
+    <div class="figures">
+      <div class="figure"><span class="v">1,358&times;</span><span class="l">Real-time factor, so a standard hour per class runs in under three seconds</span></div>
+      <div class="figure"><span class="v">CI</span><span class="l">Add a class and the build tells you where it lands against the others</span></div>
+      <div class="figure"><span class="v">per class</span><span class="l">The ledger agreement check has to stay green for every class you ship</span></div>
+    </div>
+    <p>A class's rotation is data, so every class can be run through a standard hour &mdash; same
+      ground, same level, same gear budget &mdash; and compared on kills per hour, survivability,
+      and downtime, before anyone plays it. <code>tools/bench-sim.test.ts</code> is where this
+      grows.</p>
   </section>
 
   <section>
     <h2>The build order</h2>
-    <p>Each phase ships alone and is worth having if the next never lands.</p>
+    <p>Each phase ships alone. The ordering rule that matters: <b>everything that breaks the save
+      schema happens before there is a server.</b></p>
     <div class="phases">
 
       <article class="phase">
@@ -677,46 +755,90 @@ render ◀─── snapshot deltas ────  simulation <span class="a">(20
         <span class="num">1</span>
         <div class="content">
           <h3>Make the simulation hostable</h3>
-          <p>R1 through R5, in order. Still no server &mdash; the game runs in the browser exactly as
-            it does now, on a fixed timestep, with split randomness, no view dependency, and a wire
-            type it doesn't yet use. This is the rewrite, and it lands with the game playable at
-            every step.</p>
-          <p class="done"><b>Done when</b> the browser game plays identically, <code>npm run
-            bench</code> still reports its capacity, and the simulation compiles with no reference to
-            <code>window</code> or a view rectangle.</p>
+          <p>R1 through R5. The game still runs in the browser exactly as it does now, on a fixed
+            timestep, with split randomness, no view dependency, and wire types it doesn't yet
+            use.</p>
+          <p class="done"><b>Done when</b> the browser game plays identically and the simulation
+            compiles with no reference to <code>window</code> or a view rectangle.</p>
         </div>
       </article>
 
       <article class="phase">
         <span class="num">2</span>
         <div class="content">
+          <h3>Classes, abilities, and the schema</h3>
+          <p>R9, R10, and the threat-table half of R11. Still client-only, still single-player, and
+            therefore still free to break anything. Ship at least two classes so the abstractions are
+            tested by a second case rather than designed for one.</p>
+          <p class="done"><b>Done when</b> a second class plays end to end, its rotation is data, and
+            the balance comparison runs in CI.</p>
+        </div>
+      </article>
+
+      <article class="phase net">
+        <span class="num">3</span>
+        <div class="content">
           <h3>The server runs the simulation</h3>
-          <p>R6 and R7. Accounts, WebSocket sessions, one simulation per connection, prediction and
-            interpolation on the client. No offline handling yet: disconnect ends the session and the
-            character is saved where it stood.</p>
+          <p>R6 and R7, solo only. Accounts, WebSocket sessions, one instance per session, prediction
+            and interpolation. Disconnect ends the session and saves the character where it stood.</p>
           <p class="done"><b>Done when</b> you can play a full session with the simulation on the
             server and movement still feels immediate.</p>
         </div>
       </article>
 
-      <article class="phase">
-        <span class="num">3</span>
+      <article class="phase net">
+        <span class="num">4</span>
         <div class="content">
           <h3>Absence</h3>
-          <p>Hibernation, the catch-up tier, and the ledger tier. R8 ships here or before.</p>
+          <p>Hibernation, the catch-up tier, and the ledger tier. R8 ships here or earlier. Build
+            hibernation properly &mdash; instance migration in Phase 6 is the same machinery.</p>
           <p class="done"><b>Done when</b> a fifteen-minute disconnect resumes exactly, a twelve-hour
             one settles through the ledger, and the payout at the boundary doesn't jump.</p>
         </div>
       </article>
 
-      <article class="phase">
-        <span class="num">4</span>
+      <article class="phase net">
+        <span class="num">5</span>
+        <div class="content">
+          <h3>Presence</h3>
+          <p>Other players appear in your world. No shared simulation, no combat interaction &mdash;
+            a spatial index, a pub/sub, and view types for avatars. This is the cheapest phase and
+            the one players notice most, which is exactly why it comes before grouping: the world
+            stops feeling empty long before the hard part lands.</p>
+          <p class="done"><b>Done when</b> you can stand in Hearthglen and watch other people walk
+            through it.</p>
+        </div>
+      </article>
+
+      <article class="phase net">
+        <span class="num">6</span>
+        <div class="content">
+          <h3>Parties</h3>
+          <p>The party half of R11, instance migration, invites, shared experience and loot rules,
+            party-scoped modifiers.</p>
+          <p class="done"><b>Done when</b> two players fight the same wolf, and one of them can be a
+            healer.</p>
+        </div>
+      </article>
+
+      <article class="phase net">
+        <span class="num">7</span>
+        <div class="content">
+          <h3>Dungeons</h3>
+          <p>Instanced maps with their own generator or authored layouts, an entrance and a
+            completion state, and the disconnect rule from &ldquo;idle is solo.&rdquo;</p>
+          <p class="done"><b>Done when</b> a party clears a dungeon, and a disconnect midway returns
+            that character to the entrance without losing anything else.</p>
+        </div>
+      </article>
+
+      <article class="phase net">
+        <span class="num">8</span>
         <div class="content">
           <h3>The shared world</h3>
-          <p>Ladders, an apex kill feed, and ghosts &mdash; all readouts of state the server already
-            holds.</p>
-          <p class="done"><b>Done when</b> the world feels inhabited without a single synchronized
-            position.</p>
+          <p>Contested apex beasts with damage aggregated across every party present, ladders, a kill
+            feed, guilds, and chat &mdash; mostly readouts of state the server already holds.</p>
+          <p class="done"><b>Done when</b> a scheduled apex draws a crowd.</p>
         </div>
       </article>
 
@@ -726,23 +848,26 @@ render ◀─── snapshot deltas ────  simulation <span class="a">(20
   <section>
     <h2>Hazards</h2>
     <ul>
-      <li><b>The tier boundary.</b> Catch-up and ledger must pay comparably or players will farm the
+      <li><b>The tier boundary.</b> Catch-up and ledger must pay comparably or players farm the
         seam.</li>
-      <li><b>Hibernation must be atomic.</b> Serializing a character while a tick is in flight is how
-        duplicated loot happens. Drain, then snapshot, then stop.</li>
+      <li><b>Hibernation must be atomic.</b> Serializing a character mid-tick is how loot gets
+        duplicated &mdash; and once it's also the migration path into a party, how it gets duplicated
+        <i>deliberately</i>. Drain, then snapshot, then stop.</li>
       <li><b>The RNG split is easy to get subtly wrong.</b> A draw classified as cosmetic that
-        actually feeds an AI decision reintroduces the dependency. Review R2 call site by call site,
-        not file by file.</li>
-      <li><b>Interpolation and the 12-hour cap don't compose.</b> A client watching an interpolated
-        world after a rate-model settle will see beasts pop into place. Settle, then tick, then
-        stream.</li>
+        actually feeds an AI decision reintroduces the dependency. Review R2 call site by call
+        site.</li>
+      <li><b>Threat is where multiplayer exploits live.</b> A threat model that can be zeroed, or
+        that ignores healing, turns every group fight into one character kiting for the others.
+        Design it with the rotations in R10, not after them.</li>
+      <li><b>Per-class ledger drift.</b> Every class needs <code>killsPerHour()</code> and its live
+        rotation to agree, or the offline rate quietly becomes wrong for everyone except the
+        Warrior.</li>
       <li><b>Content drift between client and server.</b> Hash the content tables at build time and
-        refuse a session across a mismatch. Under authority this matters more, not less: the
-        client's renderer indexes into the same tables.</li>
-      <li><b>The world seed is a constant.</b> Store it per character from day one anyway.</li>
+        refuse a session across a mismatch.</li>
       <li><b>Prediction divergence on terrain.</b> The predictor and the server must share collision
-        code exactly, or players rubber-band at walls &mdash; the one place where a small numerical
-        disagreement is visible.</li>
+        code exactly, or players rubber-band at walls.</li>
+      <li><b>Presence is a privacy surface.</b> Broadcasting position and name to strangers is a
+        product decision as much as a technical one. Decide what's public before Phase 5.</li>
     </ul>
   </section>
 
@@ -752,12 +877,14 @@ render ◀─── snapshot deltas ────  simulation <span class="a">(20
       <table>
         <thead><tr><th>Decision</th><th>Assumed</th><th>If you disagree</th></tr></thead>
         <tbody>
-          <tr><td>Tick rate</td><td>20 Hz</td><td>10 Hz doubles capacity and coarsens the fastest attack interval; 30 Hz costs a third of capacity for little visible gain.</td></tr>
-          <tr><td>Catch-up window</td><td>15 minutes</td><td>Longer is affordable as a background job but widens the window where a stale client shows an old world.</td></tr>
+          <tr><td>Beast ownership</td><td>Party-scoped; no contention outside apex fights</td><td>A true shared spawn pool is cheaper per player at scale, and makes idle income depend on who else is standing there.</td></tr>
+          <tr><td>Party size</td><td>Up to 5</td><td>Larger parties raise per-instance cost and make the threat model harder to tune.</td></tr>
+          <tr><td>Tick rate</td><td>20 Hz</td><td>10 Hz doubles capacity and coarsens the fastest attack interval; 30 Hz costs a third for little visible gain.</td></tr>
+          <tr><td>Catch-up window</td><td>15 minutes, solo only</td><td>Longer is affordable as a background job but widens the window where a stale client shows an old world.</td></tr>
           <tr><td>Closing the ledger gap</td><td>Raise the ledger's rate to the intended 0.72</td><td>Lowering <code>OFFLINE.efficiency</code> to match reality is equally valid and cheaper, but makes idling meaningfully worse.</td></tr>
-          <tr><td>Sign-in</td><td>Anonymous device account, email link later</td><td>Requiring email up front simplifies recovery and costs you players.</td></tr>
-          <tr><td>Existing saves</td><td>Import once, validated by <code>verify.ts</code></td><td>Starting everyone fresh is simpler and throws away real characters.</td></tr>
-          <tr><td>Wire encoding</td><td>Binary, quantized, interest-scoped</td><td>JSON is simpler and costs roughly 40&times; the bandwidth.</td></tr>
+          <tr><td>Classes at Phase 2</td><td>Two, so the abstraction has a second case</td><td>One class means designing the system around the Warrior again.</td></tr>
+          <tr><td>Realms</td><td>One realm, one seed; shards only if population demands</td><td>Multiple realms split the player base early and complicate the wall-clock apex schedule.</td></tr>
+          <tr><td>Existing saves</td><td>Import once through <code>verify.ts</code></td><td>Starting everyone fresh is simpler and throws away real characters.</td></tr>
         </tbody>
       </table>
     </div>
